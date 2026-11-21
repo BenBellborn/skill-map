@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill Map</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d2330'/%3E%3Cpath d='M11 16C16 16 15 9 20 9M11 16C16 16 15 23 20 23' stroke='%23c3c9d4' stroke-width='1.6' fill='none'/%3E%3Crect x='3' y='12' width='9' height='8' rx='2' fill='%235b93f5'/%3E%3Crect x='20' y='5' width='9' height='8' rx='2' fill='%23f0a052'/%3E%3Crect x='20' y='19' width='9' height='8' rx='2' fill='%234cc28c'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #c3c9d4; --dim: 0.18;
+  --command: #2f6fde; --shared: #8a4fd6; --agent: #d9822b; --md: #2e9e6b; --outside: #7d8696; --builtin: #c2378a; --hl: #0b8fa3;
+  --hook: #a67c00; --mod: #5f8a1f; --plugin: #8a5a2b; --mcp: #1f7a8c; --tool: #4a5568;
+  --save: #d92d20;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --panel: #1c212a; --text: #e6e9ef; --muted: #9aa3b2; --line: #3a4250;
+    --command: #5b93f5; --shared: #b083f0; --agent: #f0a052; --md: #4cc28c; --outside: #8d96a6; --builtin: #ef7ab8; --hl: #2cc6d9;
+    --hook: #d9b23c; --mod: #93c24f; --plugin: #c99265; --mcp: #4fb3c7; --tool: #b4bfcf;
+    --save: #ff6b6f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1c212a; --text: #e6e9ef; --muted: #9aa3b2; --line: #3a4250;
+  --command: #5b93f5; --shared: #b083f0; --agent: #f0a052; --md: #4cc28c; --outside: #8d96a6; --builtin: #ef7ab8; --hl: #2cc6d9;
+  --hook: #d9b23c; --mod: #93c24f; --plugin: #c99265; --mcp: #4fb3c7; --tool: #b4bfcf;
+  --save: #ff6b6f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#viewport { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+#viewport.dragging { cursor: grabbing; }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.edge.back { stroke-dasharray: 6 4; }
+.edge-label { fill: var(--muted); font-size: 11px; display: none; }
+.focus .edge-label.on { display: inline; pointer-events: auto; cursor: help; }
+.card { position: absolute; width: 300px; background: var(--panel); border: 1px solid var(--line);
+  border-left: 5px solid var(--kind); border-radius: 8px; padding: 8px 10px; cursor: pointer;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08); }
+.card h3 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
+.card .tag { font-size: 11px; font-weight: 500; color: var(--kind); white-space: nowrap; }
+.card .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.card ul { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.card li { display: flex; justify-content: space-between; gap: 6px; padding: 1px 0; }
+.card li .when { color: var(--muted); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.args { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.arg { font: inherit; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--kind);
+  background: transparent; color: var(--text); cursor: pointer; }
+.k-command { --kind: var(--command); } .k-shared { --kind: var(--shared); } .k-agent { --kind: var(--agent); }
+.k-md { --kind: var(--md); } .k-outside { --kind: var(--outside); } .k-builtin { --kind: var(--builtin); }
+.k-hook { --kind: var(--hook); } .k-mod { --kind: var(--mod); } .k-plugin { --kind: var(--plugin); } .k-mcp { --kind: var(--mcp); } .k-tool { --kind: var(--tool); }
+.card.shared-md { border-style: dashed; border-left-style: solid; }
+.focus .card, .focus .edge, .focus .edge-label, .focus li { opacity: var(--dim); }
+.focus .card.on, .focus li.on { opacity: 1; }
+.focus .edge.on { opacity: 1; stroke: var(--hl); stroke-width: 2.5; }
+.focus .card.caller, .focus .edge.caller, .focus .edge-label.caller { opacity: 1; }
+.focus .edge.caller { stroke: var(--hl); stroke-width: 2; stroke-dasharray: 3 3; }
+.focus .edge-label.caller { display: inline; fill: var(--hl); }
+.card.caller { box-shadow: 0 0 0 2px var(--hl); border-style: dashed; }
+.focus .edge-label.on { opacity: 1; fill: var(--hl); }
+.card.on { box-shadow: 0 0 0 2px var(--hl); }
+.arg.on { background: var(--hl); border-color: var(--hl); color: #fff; }
+.card.save { box-shadow: 0 0 0 3px var(--save); }
+.focus li.save { color: var(--save); font-weight: 600; }
+#bar { position: fixed; top: 12px; right: 16px; display: flex; gap: 6px; z-index: 2; }
+#bar button { font: inherit; width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); cursor: pointer; }
+#legend { position: fixed; left: 16px; bottom: 12px; z-index: 2; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; max-width: calc(100vw - 32px); }
+#legend span { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
+#legend button { font: inherit; display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; padding: 1px 6px;
+  border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text); cursor: pointer; }
+#legend button.on { border-color: var(--kind); font-weight: 600; }
+#legend i { width: 10px; height: 10px; border-radius: 2px; background: var(--kind); display: inline-block; }
+#top { position: fixed; top: 12px; left: 16px; right: 140px; z-index: 2; display: flex; flex-direction: column; gap: 6px;
+  align-items: flex-start; pointer-events: none; }
+#status { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; max-width: min(100%, 900px); max-height: 40vh; overflow-y: auto; pointer-events: auto; }
+#status header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#status h2 { margin: 0; font-size: 13px; }
+#status .total { font-weight: 600; margin-top: 2px; }
+#status .hint { color: var(--muted); }
+#status .item { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid var(--line); }
+#status .item .head { color: var(--save); font-weight: 600; }
+#status .item .prompt { grid-column: 1; min-width: 0; }
+#status .item button { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+#status button { font: inherit; font-size: 11px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: transparent; color: var(--text); cursor: pointer; }
+.card .problem { display: inline-block; margin-left: 6px; width: 16px; height: 16px; border-radius: 50%; background: var(--save);
+  color: #fff; font-size: 11px; line-height: 16px; text-align: center; cursor: help; }
+</style>
+</head>
+<body>
+<div id="viewport"><div id="world"><svg id="edges"></svg></div></div>
+<div id="bar"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">&minus;</button>
+<button id="fit" title="Fit (key 0)">&#x2922;</button></div>
+<div id="legend">
+<!-- rule: kinds in the column band order of layout.BANDS. -->
+<button class="k-command" data-kind="k-command"><i></i>command skill</button><button class="k-agent" data-kind="k-agent"><i></i>agent</button>
+<button class="k-hook" data-kind="k-hook"><i></i>hook</button><button class="k-mod" data-kind="k-mod"><i></i>mod</button>
+<button class="k-plugin" data-kind="k-plugin"><i></i>plugin</button>
+<button class="k-shared" data-kind="k-shared"><i></i>shared skill</button><button class="k-md" data-kind="k-md"><i></i>shared md</button>
+<button class="k-outside" data-kind="k-outside"><i></i>project file</button><button class="k-builtin" data-kind="k-builtin"><i></i>builtin command</button><button class="k-mcp" data-kind="k-mcp"><i></i>MCP</button><button class="k-tool" data-kind="k-tool"><i></i>CLI tool</button>
+<span>- - - loop back</span><span>click card or arg to trace (dashed: its callers), a kind to show all its cards; empty space or Esc clears</span>
+</div>
+<div id="top"><div id="status"></div></div>
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(() => {
+  const data = JSON.parse(document.getElementById("data").textContent);
+  const world = document.getElementById("world"), svg = document.getElementById("edges");
+  const viewport = document.getElementById("viewport");
+  const nodes = new Map(data.nodes.map(n => [n.id, n]));
+  const cards = new Map(), argButtons = new Map(), edgeEls = new Map();
+  const view = { x: 40, y: 60, s: 1 };
+  let panned = false;
+  // rule: keyboard click has detail 0 and no pointerup; only pointer click after drag is pan.
+  const isPanClick = ev => ev.detail > 0 && panned;
+
+  const OWN_KINDS = ["command", "shared", "agent", "md", "builtin", "hook", "mod", "plugin", "mcp", "tool"];
+  const kindClass = n => OWN_KINDS.includes(n.kind) ? `k-${n.kind}` : "k-outside";
+  const tagText = n => n.kind === "agent" ? [n.model, n.count].filter(Boolean).join(" · ")
+    : n.kind === "md" ? (n.shared ? "shared md" : "md") : n.kind === "skill" ? "skill" : n.kind;
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function buildCard(n) {
+    const card = el("div", `card ${kindClass(n)}${n.kind === "md" && n.shared ? " shared-md" : ""}`);
+    card.style.left = n.x + "px"; card.style.top = n.y + "px";
+    const head = el("h3");
+    head.append(el("span", "", n.label), el("span", "tag", tagText(n)));
+    card.append(head);
+    const meta = [n.summary, n.tok ? `~${n.tok} tok md` : ""].filter(Boolean).join(" · ");
+    if (meta) card.append(el("div", "meta", meta));
+    if (n.mds.length) card.append(buildMdList(n));
+    if (n.args.length) card.append(buildArgs(n));
+    card.addEventListener("click", ev => { ev.stopPropagation(); if (!isPanClick(ev)) trace(n.id, null); });
+    world.append(card);
+    cards.set(n.id, card);
+  }
+
+  function buildMdList(n) {
+    const ul = el("ul");
+    for (const [i, md] of n.mds.entries()) {
+      const li = el("li");
+      li.dataset.index = i;
+      li.dataset.args = JSON.stringify(md.args || []);
+      li.title = md.when || "";
+      li.append(el("span", "", `${md.name} ~${md.tok}`), el("span", "when", md.when || ""));
+      ul.append(li);
+    }
+    return ul;
+  }
+
+  function buildArgs(n) {
+    const box = el("div", "args");
+    for (const arg of n.args) {
+      const b = el("button", "arg", `[${arg.label || arg.id}]`);
+      b.title = arg.note || "";
+      b.addEventListener("click", ev => { ev.stopPropagation(); if (!isPanClick(ev)) trace(n.id, arg.id); });
+      box.append(b);
+      argButtons.set(`${n.id}|${arg.id}`, b);
+    }
+    return box;
+  }
+
+  function resolveOverlaps() {
+    const columns = new Map();
+    for (const n of data.nodes) {
+      if (!columns.has(n.x)) columns.set(n.x, []);
+      columns.get(n.x).push(n);
+    }
+    for (const col of columns.values()) {
+      col.sort((a, b) => a.y - b.y);
+      let bottom = -Infinity;
+      for (const n of col) {
+        n.y = Math.max(n.y, bottom + 24);
+        cards.get(n.id).style.top = n.y + "px";
+        bottom = n.y + cards.get(n.id).offsetHeight;
+      }
+    }
+  }
+
+  function edgePath(e) {
+    const a = cards.get(e.src), b = cards.get(e.dst);
+    const ax = a.offsetLeft + a.offsetWidth, ay = a.offsetTop + 18, bx = b.offsetLeft, by = b.offsetTop + 18;
+    if (!e.back && bx === a.offsetLeft) {
+      // rule: an edge inside one column (mod to plugin) bends out right of both cards.
+      const tx = bx + b.offsetWidth, out = Math.max(ax, tx) + 60;
+      return { d: `M${ax},${ay} C${out},${ay} ${out},${by} ${tx},${by}`, lx: out - 30, ly: (ay + by) / 2 - 4 };
+    }
+    if (!e.back && bx < a.offsetLeft) {
+      // rule: an edge into a band further left leaves the card's left side and enters the target's right side.
+      const sx = a.offsetLeft, tx = bx + b.offsetWidth, dx = Math.max(40, (sx - tx) / 2);
+      return { d: `M${sx},${ay} C${sx - dx},${ay} ${tx + dx},${by} ${tx},${by}`, lx: (sx + tx) / 2, ly: (ay + by) / 2 - 4 };
+    }
+    if (!e.back) {
+      const dx = Math.max(40, (bx - ax) / 2);
+      return { d: `M${ax},${ay} C${ax + dx},${ay} ${bx - dx},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 - 4 };
+    }
+    const low = Math.max(a.offsetTop + a.offsetHeight, b.offsetTop + b.offsetHeight) + 40;
+    const sx = a.offsetLeft + a.offsetWidth / 2, tx = b.offsetLeft + b.offsetWidth / 2;
+    const sy = a.offsetTop + a.offsetHeight, ty = b.offsetTop + b.offsetHeight;
+    return { d: `M${sx},${sy} C${sx},${low} ${tx},${low} ${tx},${ty}`, lx: (sx + tx) / 2, ly: low - 8 };
+  }
+
+  function drawEdges() {
+    const ns = "http://www.w3.org/2000/svg";
+    for (const e of data.edges) {
+      const p = edgePath(e);
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", p.d);
+      path.setAttribute("class", `edge${e.back ? " back" : ""}`);
+      path.setAttribute("marker-end", "url(#arrow)");
+      svg.append(path);
+      const text = [e.kind === "spawn" ? `spawn ${e.count}`.trim() : e.kind, e.callArgs, e.when, e.loop].filter(Boolean).join(" · ");
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", p.lx); label.setAttribute("y", p.ly);
+      label.setAttribute("text-anchor", "middle"); label.setAttribute("class", "edge-label");
+      label.textContent = text.length > 60 ? text.slice(0, 57) + "..." : text;
+      const tip = document.createElementNS(ns, "title"); tip.textContent = text; label.append(tip);
+      svg.append(label);
+      edgeEls.set(e.id, [path, label]);
+    }
+    svg.insertAdjacentHTML("afterbegin", '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" ' +
+      'markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>');
+  }
+
+  function childArgs(e) {
+    const ids = new Set((nodes.get(e.dst).args || []).map(a => a.id));
+    const passed = (e.callArgs || "").split(/\s+/).filter(t => ids.has(t));
+    return passed.length ? passed : [null];
+  }
+
+  function edgeMatches(e, arg) {
+    return arg === null || !e.args || e.args.length === 0 || e.args.includes(arg);
+  }
+
+  function trace(startId, startArg) {
+    clearTrace();
+    document.body.classList.add("focus");
+    const seen = new Set(), queue = [[startId, startArg]];
+    if (startArg !== null) argButtons.get(`${startId}|${startArg}`).classList.add("on");
+    while (queue.length) {
+      const [id, arg] = queue.shift();
+      const key = `${id}|${arg}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      markCard(id, arg);
+      for (const e of data.edges) {
+        if (e.src !== id || !edgeMatches(e, arg)) continue;
+        edgeEls.get(e.id).forEach(x => x.classList.add("on"));
+        childArgs(e).forEach(arg => queue.push([e.dst, arg]));
+      }
+    }
+    markCallers(startId);
+    showStatus(startId, startArg);
+  }
+
+  // rule: callers show as context only: class `caller`, never `on`, so flow tokens, fixes and hints stay the start's own.
+  function markCallers(startId) {
+    const seen = new Set([startId]), queue = [startId];
+    while (queue.length) {
+      const id = queue.shift();
+      for (const e of data.edges) {
+        if (e.dst !== id) continue;
+        edgeEls.get(e.id).forEach(x => x.classList.add("caller"));
+        if (seen.has(e.src)) continue;
+        seen.add(e.src);
+        cards.get(e.src).classList.add("caller");
+        queue.push(e.src);
+      }
+    }
+  }
+
+  const status = document.getElementById("status");
+  const formatTok = t => t >= 1000 ? `${(t / 1000).toFixed(1)}k` : `${t}`;
+  const formatTime = ms => ms >= 60000 ? `~${Math.round(ms / 60000)} min` : `~${Math.max(1, Math.round(ms / 1000))} s`;
+
+  // rule: no trace lists the whole map: every fix, top 5 savings; a trace lists only its highlighted cards.
+  function showStatus(startId, startArg) {
+    status.replaceChildren();
+    document.querySelectorAll(".save").forEach(x => x.classList.remove("save"));
+    const traced = startId !== null, flow = measureFlow(traced);
+    const items = [...findFixItems(traced), ...flow.hints.sort((a, b) => b.save - a.save).slice(0, 5)];
+    const header = el("header");
+    header.append(el("h2", "", "Token saver & fix"));
+    if (items.length) header.append(buildCopyButton("Copy all", () => buildPromptList(items)));
+    status.append(header, traced ? buildTotal(flow, startId, startArg)
+      : el("div", "hint", "Whole map · click a card or arg for its tokens, time and fixes"));
+    for (const item of items) {
+      const row = el("div", "item");
+      row.append(el("div", "head", item.head), buildCopyButton("Copy", () => item.prompt), el("div", "prompt", item.prompt));
+      status.append(row);
+      item.target.classList.add("save");
+    }
+    if (!items.length) status.append(el("div", "hint", "Nothing to save or fix here"));
+  }
+
+  function buildTotal(flow, startId, startArg) {
+    const n = nodes.get(startId), name = startArg === null ? n.label : `${n.label} [${startArg}]`;
+    const starts = flow.starts ? ` · ${flow.starts} agent starts` : "";
+    const total = el("div", "total", `${name}: ~${formatTok(flow.tok)} tok read · est. ${formatTime(flow.ms)}${starts}`);
+    total.title = `Agent start ~${formatTok(data.cost.agentBase)} tok each; time ${data.cost.msPerTok} ms per context token, ` +
+      "parallel agent runs counted once (medians of past agent runs)";
+    return total;
+  }
+
+  function findFixItems(traced) {
+    const items = [];
+    for (const p of data.problems) {
+      const card = cards.get(p.node || `skill:${p.skill}`);
+      if (traced && !(card && card.classList.contains("on"))) continue;
+      items.push({ head: `fix · ${p.skill}: ${p.text}`, prompt: p.prompt, target: card || status });
+    }
+    return items;
+  }
+
+  function buildPromptList(items) {
+    return "Fix these in my Claude Code setup (~/.claude):\n" + items.map((it, i) => `${i + 1}. ${it.prompt}`).join("\n");
+  }
+
+  function buildCopyButton(label, getText) {
+    const b = el("button", "", label);
+    b.addEventListener("click", async () => {
+      const ok = await copyText(getText());
+      b.textContent = ok ? "Copied" : "Copy failed";
+      setTimeout(() => { b.textContent = label; }, 1500);
+    });
+    return b;
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* file page without clipboard access */ }
+    const area = el("textarea");
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+
+  // rule: agent tok already holds md it loads; node only agents load adds no tokens.
+  function measureFlow(traced) {
+    const flow = { tok: 0, ms: 0, starts: 0, hints: [] }, ms = data.cost.msPerTok;
+    let mainTok = data.cost.agentBase;
+    for (const [id, card] of cards) {
+      if (traced && !card.classList.contains("on")) continue;
+      const n = nodes.get(id), counted = n.kind !== "agent" && !isAgentLoadOnly(id);
+      n.hints.forEach(h => flow.hints.push({ ...h, head: `save ~${formatTok(h.save)} tok · ${n.label}`, target: card }));
+      if (n.kind === "agent") addAgent(flow, n);
+      if (counted) { flow.tok += n.tok; mainTok += n.tok; }
+      for (const li of card.querySelectorAll(traced ? "li.on" : "li")) {
+        const md = n.mds[li.dataset.index];
+        md.hints.forEach(h => flow.hints.push({ ...h, head: `save ~${formatTok(h.save)} tok · ${n.label}`, target: li }));
+        if (counted) { flow.tok += md.tok; mainTok += md.tok; }
+      }
+    }
+    flow.ms += mainTok * ms;
+    return flow;
+  }
+
+  function addAgent(flow, n) {
+    const ctx = data.cost.agentBase + n.tok;
+    flow.tok += n.runs * ctx;
+    flow.ms += ctx * data.cost.msPerTok;
+    flow.starts += n.runs;
+  }
+
+  function markProblemCard(p) {
+    const card = cards.get(p.node || `skill:${p.skill}`);
+    if (!card) return;
+    let badge = card.querySelector(".problem");
+    if (!badge) {
+      badge = el("span", "problem", "!");
+      card.querySelector("h3 span").append(badge);
+    }
+    badge.title = [badge.title, p.prompt].filter(Boolean).join("\n");
+  }
+
+  function isAgentLoadOnly(id) {
+    const ins = data.edges.filter(e => e.dst === id && edgeEls.get(e.id)[0].classList.contains("on"));
+    return ins.length > 0 && ins.every(e => e.kind === "load" && nodes.get(e.src).kind === "agent");
+  }
+
+  function markCard(id, arg) {
+    const card = cards.get(id);
+    card.classList.add("on");
+    for (const li of card.querySelectorAll("li")) {
+      const args = JSON.parse(li.dataset.args);
+      if (arg === null || args.length === 0 || args.includes(arg)) li.classList.add("on");
+    }
+  }
+
+  // rule: a kind click marks every card of that kind; a second click on it clears, as Esc does.
+  function highlightKind(button) {
+    const wasOn = button.classList.contains("on");
+    clearTrace();
+    if (wasOn) return;
+    document.body.classList.add("focus");
+    button.classList.add("on");
+    cards.forEach(card => { if (card.classList.contains(button.dataset.kind)) card.classList.add("on"); });
+  }
+
+  function clearTrace() {
+    document.body.classList.remove("focus");
+    document.querySelectorAll(".on, .save, .caller").forEach(x => x.classList.remove("on", "save", "caller"));
+    showStatus(null, null);
+  }
+
+  function applyView() { world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`; }
+
+  function zoomAt(factor, cx, cy) {
+    const s = Math.min(3, Math.max(0.15, view.s * factor));
+    view.x = cx - (cx - view.x) * (s / view.s);
+    view.y = cy - (cy - view.y) * (s / view.s);
+    view.s = s;
+    applyView();
+  }
+
+  // rule: fit keeps every card clear of the top bar and legend, both fixed over the map.
+  function fit() {
+    let maxX = 0, maxY = 0;
+    for (const c of cards.values()) {
+      maxX = Math.max(maxX, c.offsetLeft + c.offsetWidth);
+      maxY = Math.max(maxY, c.offsetTop + c.offsetHeight + 60);
+    }
+    const top = Math.max(60, document.getElementById("top").getBoundingClientRect().bottom + 12);
+    const bottom = document.getElementById("legend").getBoundingClientRect().top - 12;
+    view.s = Math.min(1.2, Math.max(0.05, Math.min((innerWidth - 80) / (maxX || 1), (bottom - top) / (maxY || 1))));
+    view.x = 40; view.y = top;
+    applyView();
+  }
+
+  function bindControls() {
+    viewport.addEventListener("wheel", ev => { ev.preventDefault(); zoomAt(ev.deltaY < 0 ? 1.1 : 1 / 1.1, ev.clientX, ev.clientY); },
+      { passive: false });
+    let drag = null;
+    viewport.addEventListener("pointerdown", ev => {
+      drag = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y, moved: false };
+      panned = false;
+      viewport.classList.add("dragging");
+    });
+    addEventListener("pointermove", ev => {
+      if (!drag) return;
+      drag.moved = drag.moved || Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) > 4;
+      view.x = drag.vx + ev.clientX - drag.x; view.y = drag.vy + ev.clientY - drag.y;
+      applyView();
+    });
+    addEventListener("pointerup", ev => {
+      panned = Boolean(drag && drag.moved);
+      if (drag && !drag.moved && ev.target === viewport) clearTrace();
+      drag = null;
+      viewport.classList.remove("dragging");
+    });
+    document.getElementById("zin").onclick = () => zoomAt(1.2, innerWidth / 2, innerHeight / 2);
+    document.getElementById("zout").onclick = () => zoomAt(1 / 1.2, innerWidth / 2, innerHeight / 2);
+    document.getElementById("fit").onclick = fit;
+    addEventListener("keydown", ev => { if (ev.key === "0") fit(); if (ev.key === "Escape") clearTrace(); });
+    document.querySelectorAll("#legend button").forEach(b => b.addEventListener("click", () => highlightKind(b)));
+  }
+
+  data.nodes.forEach(buildCard);
+  resolveOverlaps();
+  svg.style.color = getComputedStyle(document.documentElement).getPropertyValue("--line");
+  drawEdges();
+  data.problems.forEach(markProblemCard);
+  bindControls();
+  showStatus(null, null);
+  fit();
+})();
+</script>
+</body>
+</html>

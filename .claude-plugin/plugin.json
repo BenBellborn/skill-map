@@ -1,0 +1,7 @@
+{
+  "name": "skill-map",
+  "description": "Draws a zoomable map of your Claude Code skills, hooks, mods and plugins: which md files, agents and tools each command pulls in, and where tokens can be saved.",
+  "author": { "name": "Ben Bellborn" },
+  "repository": "https://github.com/BenBellborn/skill-map",
+  "license": "MIT"
+}
