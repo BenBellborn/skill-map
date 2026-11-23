@@ -487,6 +487,16 @@ def test_layout_stacks_a_far_column_under_a_near_one_within_tallest_height():
     assert len(set(x.values())) == 4
 
 
+def test_layout_moves_a_card_out_of_its_band_column_when_an_edge_runs_back():
+    # SKILLMAP-10.7
+    kinds = {"c": "command", "r": "command", "s": "shared", "a1": "agent", "a2": "agent", "a3": "agent"}
+    cards = {i: {"id": i, "kind": k, "mds": []} for i, k in kinds.items()}
+    links = [("c", "a1"), ("a1", "s")]
+    columns = layout.place_cards([[["c"]], [["r"]], [["s"]], [["a1", "a2", "a3"]]], cards,
+                                 [{"src": s, "dst": d} for s, d in links])
+    assert columns == [[["c"]], [["r", "a1"]], [["s"]], [["a2", "a3"]]]
+
+
 def test_layout_pulls_linked_cards_level_and_keeps_column_gaps():
     # SKILLMAP-10.3
     cards = {i: {"id": i, "kind": "skill", "mds": []} for i in "abcd"}

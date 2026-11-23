@@ -10,32 +10,31 @@
   --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #c3c9d4; --dim: 0.18;
   --command: #2f6fde; --shared: #8a4fd6; --agent: #d9822b; --md: #2e9e6b; --outside: #7d8696; --builtin: #c2378a; --hl: #0b8fa3;
   --hook: #a67c00; --mod: #5f8a1f; --plugin: #8a5a2b; --mcp: #1f7a8c; --tool: #4a5568;
-  --save: #d92d20;
+  --save: #d92d20; --hover: #1d2330;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #12151b; --panel: #1c212a; --text: #e6e9ef; --muted: #9aa3b2; --line: #3a4250;
     --command: #5b93f5; --shared: #b083f0; --agent: #f0a052; --md: #4cc28c; --outside: #8d96a6; --builtin: #ef7ab8; --hl: #2cc6d9;
     --hook: #d9b23c; --mod: #93c24f; --plugin: #c99265; --mcp: #4fb3c7; --tool: #b4bfcf;
-    --save: #ff6b6f;
+    --save: #ff6b6f; --hover: #ffffff;
   }
 }
 :root[data-theme="dark"] {
   --bg: #12151b; --panel: #1c212a; --text: #e6e9ef; --muted: #9aa3b2; --line: #3a4250;
   --command: #5b93f5; --shared: #b083f0; --agent: #f0a052; --md: #4cc28c; --outside: #8d96a6; --builtin: #ef7ab8; --hl: #2cc6d9;
   --hook: #d9b23c; --mod: #93c24f; --plugin: #c99265; --mcp: #4fb3c7; --tool: #b4bfcf;
-  --save: #ff6b6f;
+  --save: #ff6b6f; --hover: #ffffff;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
   font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-#viewport { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+#viewport { position: absolute; inset: 0; cursor: grab; touch-action: none; user-select: none; }
 #viewport.dragging { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
-.edge.back { stroke-dasharray: 6 4; }
-.edge-label { fill: var(--muted); font-size: 11px; display: none; }
+.edge.back { stroke-dasharray: 6 4; }.edge-label { fill: var(--muted); font-size: 11px; display: none; }
 .focus .edge-label.on { display: inline; pointer-events: auto; cursor: help; }
 .card { position: absolute; width: 300px; background: var(--panel); border: 1px solid var(--line);
   border-left: 5px solid var(--kind); border-radius: 8px; padding: 8px 10px; cursor: pointer;
@@ -62,6 +61,11 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
 .card.caller { box-shadow: 0 0 0 2px var(--hl); border-style: dashed; }
 .focus .edge-label.on { opacity: 1; fill: var(--hl); }
 .card.on { box-shadow: 0 0 0 2px var(--hl); }
+/* rule: hover wins over trace marks: after them, same or higher specificity. */
+.card.hover { border-top-color: var(--hover); border-right-color: var(--hover); border-bottom-color: var(--hover); z-index: 1; }
+.card.on.hover, .card.caller.hover { box-shadow: 0 0 0 2px var(--hover); }
+.edge.hover { stroke-width: 2; }
+.edge.hover, .focus .edge.hover { stroke: var(--hover); }
 .arg.on { background: var(--hl); border-color: var(--hl); color: #fff; }
 .card.save { box-shadow: 0 0 0 3px var(--save); }
 .focus li.save { color: var(--save); font-weight: 600; }
@@ -105,7 +109,7 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
 <button class="k-plugin" data-kind="k-plugin"><i></i>plugin</button>
 <button class="k-shared" data-kind="k-shared"><i></i>shared skill</button><button class="k-md" data-kind="k-md"><i></i>shared md</button>
 <button class="k-outside" data-kind="k-outside"><i></i>project file</button><button class="k-builtin" data-kind="k-builtin"><i></i>builtin command</button><button class="k-mcp" data-kind="k-mcp"><i></i>MCP</button><button class="k-tool" data-kind="k-tool"><i></i>CLI tool</button>
-<span>- - - loop back</span><span>click card or arg to trace (dashed: its callers), a kind to show all its cards; empty space or Esc clears</span>
+<span>- - - loop back or leftward</span><span>click card or arg to trace (dashed: its callers), a kind to show all its cards; empty space or Esc clears</span>
 </div>
 <div id="top"><div id="status"></div></div>
 <script id="data" type="application/json">/*DATA*/</script>
@@ -144,8 +148,21 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     if (n.mds.length) card.append(buildMdList(n));
     if (n.args.length) card.append(buildArgs(n));
     card.addEventListener("click", ev => { ev.stopPropagation(); if (!isPanClick(ev)) trace(n.id, null); });
+    card.addEventListener("mouseenter", () => markHover(n.id, true));
+    card.addEventListener("mouseleave", () => markHover(n.id, false));
     world.append(card);
     cards.set(n.id, card);
+  }
+
+  function markHover(id, on) {
+    cards.get(id).classList.toggle("hover", on);
+    for (const e of data.edges) {
+      if (e.src !== id && e.dst !== id) continue;
+      const path = edgeEls.get(e.id)[0];
+      path.classList.toggle("hover", on);
+      // rule: SVG has no z-index; last child draws on top, so a hovered line moves to the end.
+      if (on) svg.append(path);
+    }
   }
 
   function buildMdList(n) {
@@ -180,12 +197,13 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
       columns.get(n.x).push(n);
     }
     for (const col of columns.values()) {
+      // rule: a column is a stack from the top, in layout order, 8 px between cards.
       col.sort((a, b) => a.y - b.y);
-      let bottom = -Infinity;
+      let bottom = 0;
       for (const n of col) {
-        n.y = Math.max(n.y, bottom + 24);
+        n.y = bottom;
         cards.get(n.id).style.top = n.y + "px";
-        bottom = n.y + cards.get(n.id).offsetHeight;
+        bottom = n.y + cards.get(n.id).offsetHeight + 8;
       }
     }
   }
@@ -193,24 +211,15 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
   function edgePath(e) {
     const a = cards.get(e.src), b = cards.get(e.dst);
     const ax = a.offsetLeft + a.offsetWidth, ay = a.offsetTop + 18, bx = b.offsetLeft, by = b.offsetTop + 18;
-    if (!e.back && bx === a.offsetLeft) {
-      // rule: an edge inside one column (mod to plugin) bends out right of both cards.
-      const tx = bx + b.offsetWidth, out = Math.max(ax, tx) + 60;
-      return { d: `M${ax},${ay} C${out},${ay} ${out},${by} ${tx},${by}`, lx: out - 30, ly: (ay + by) / 2 - 4 };
-    }
-    if (!e.back && bx < a.offsetLeft) {
-      // rule: an edge into a band further left leaves the card's left side and enters the target's right side.
-      const sx = a.offsetLeft, tx = bx + b.offsetWidth, dx = Math.max(40, (sx - tx) / 2);
-      return { d: `M${sx},${ay} C${sx - dx},${ay} ${tx + dx},${by} ${tx},${by}`, lx: (sx + tx) / 2, ly: (ay + by) / 2 - 4 };
-    }
-    if (!e.back) {
+    // rule: every edge leaves the source's right side and enters the target's left side.
+    if (bx > ax) {
       const dx = Math.max(40, (bx - ax) / 2);
       return { d: `M${ax},${ay} C${ax + dx},${ay} ${bx - dx},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 - 4 };
     }
-    const low = Math.max(a.offsetTop + a.offsetHeight, b.offsetTop + b.offsetHeight) + 40;
-    const sx = a.offsetLeft + a.offsetWidth / 2, tx = b.offsetLeft + b.offsetWidth / 2;
-    const sy = a.offsetTop + a.offsetHeight, ty = b.offsetTop + b.offsetHeight;
-    return { d: `M${sx},${sy} C${sx},${low} ${tx},${low} ${tx},${ty}`, lx: (sx + tx) / 2, ly: low - 8 };
+    // rule: a target not right of the source (same column, band further left) is reached by a loop below both cards.
+    const low = Math.max(a.offsetTop + a.offsetHeight, b.offsetTop + b.offsetHeight) + 40, r = 40;
+    return { d: `M${ax},${ay} C${ax + r},${ay} ${ax + r},${low} ${ax},${low} L${bx},${low} ` +
+      `C${bx - r},${low} ${bx - r},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: low - 8, left: true };
   }
 
   function drawEdges() {
@@ -219,8 +228,8 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
       const p = edgePath(e);
       const path = document.createElementNS(ns, "path");
       path.setAttribute("d", p.d);
-      path.setAttribute("class", `edge${e.back ? " back" : ""}`);
-      path.setAttribute("marker-end", "url(#arrow)");
+      // rule: a loop back and an edge into a band further left are both dashed.
+      path.setAttribute("class", `edge${e.back || p.left ? " back" : ""}`);
       svg.append(path);
       const text = [e.kind === "spawn" ? `spawn ${e.count}`.trim() : e.kind, e.callArgs, e.when, e.loop].filter(Boolean).join(" · ");
       const label = document.createElementNS(ns, "text");
@@ -231,8 +240,6 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
       svg.append(label);
       edgeEls.set(e.id, [path, label]);
     }
-    svg.insertAdjacentHTML("afterbegin", '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" ' +
-      'markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>');
   }
 
   function childArgs(e) {

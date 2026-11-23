@@ -46,7 +46,7 @@ a skill file.
   marks it optional).
 - **Owner:** the skill whose fragment holds a ref. A ref in an agent entry has the skill of that fragment as owner.
 - **Node:** record Node. One card on the page.
-- **Edge:** record Edge. One arrow on the page from a loader node to a target node, kind `load`, `call` or `spawn`.
+- **Edge:** record Edge. One line on the page from a loader node to a target node, kind `load`, `call` or `spawn`.
 - **Loader:** the node a ref starts from: the skill node, or the agent node for refs inside an agent entry.
 - **Own md:** a ref that resolves to a file inside the owner's skill folder and has exactly one owner over all refs.
   It is listed inside the loader card, not drawn as its own card.
@@ -479,11 +479,19 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    such source goes last.
 1. Stack: each column becomes one block. Limit is the height of the tallest column: its cards' heights plus 28
    between cards. Flow cost: each edge between two nodes costs its column span (target column minus source column,
-   as an absolute number), plus 30 when the span is 0 or less. Repeat: over every pair of a column that is not the
+   as an absolute number), plus 100 when the span is 0 or less. Repeat: over every pair of a column that is not the
    first and another column, try moving all blocks of the first under the blocks of the second, when the joined
    height stays within the limit; empty columns close up. Keep the try with the lowest cost when it is lower than the
    current cost, the first such try on a tie in order of moved column, then target column; stop when no try lowers
    the cost.
+1. Place: limit as in Stack. Score: flow cost plus 15 per column an edge passes (its absolute span less 1), less 30
+   times cohesion. Cohesion: per band with 2 or more nodes, the
+   pairs of its nodes that share a column, divided by its node count less 1; a node that leaves a column holding all
+   the rest of its band so loses 1. A backward edge (100) costs more than that (30), so it moves a node out of its
+   band's column. Repeat: over every node that is not a command, in ascending id order, and every column it does not
+   sit in, try moving it into the block of that column that holds a node it shares an edge with, else the last block,
+   when that column stays within the limit; empty blocks and columns close up. Keep the try with the lowest score
+   when it is lower than the current score, the first such try on a tie; stop when no try lowers the score.
 1. Positions: x is column times 380. y starts at 0 per column; each card, block after block, adds its height plus 28.
    Height is 64 plus
    18 per OwnMd line, plus 18 when the node has args, plus 18 for an agent.
@@ -508,6 +516,10 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
   when the layout runs, then `c` stays at x 0, `m` stacks under `a` in one column, and `s` sits right of them: 3
   columns. With no OwnMd lines on `c` the tallest column is too short for any stack: 4 columns.
 
+- **SKILLMAP-10.7:** Given columns `c` | `r` | `s` | `a1`, `a2`, `a3` (commands, shared, agents) and edges `c` to
+  `a1` and `a1` to `s`, when the place step runs, then `a1` moves under `r`, left of `s`, and `a2`, `a3` stay in
+  their column.
+
 ### R11 Page writing
 
 `render` embeds the PageData as JSON in the page template, writes it to `<cache folder>/skill-map.html`, opens it
@@ -527,12 +539,12 @@ order, then problems from the graph.
 - Meta line: summary and `~<tok> tok md` (when tok is not 0) joined by ` · `.
 - OwnMd lines: `<name> ~<tok>` and the `when` text right-aligned; tooltip the `when`.
 - Arg buttons: `[<label or id>]`, tooltip the note.
-- Before edges are drawn, cards in one column (same x) are sorted by y and each card is pushed down to at least
-  24 px below the bottom of the card above it.
-- Forward edge: curve from the right side of the source card to the left side of the target, both 18 px below the
-  card top. A forward edge into a card further left runs from the left side of the source to the right side of the
-  target; one into a card in the same column bends out 60 px right of both cards between their right sides. Back edge: dashed curve from the bottom middle of the source to the bottom middle of the target, dipping
-  40 px below the lower card.
+- Before edges are drawn, cards in one column (same x) are sorted by y and stacked from the top, 8 px apart: each card
+  starts 8 px below the bottom of the card above it, the first at y 0.
+- Every edge leaves the right side of the source card and enters the left side of the target, both 18 px below the
+  card top. Target right of the source: curve between those points. Target in the same column or a column further left:
+  dashed loop that bends out right of the source, runs left 40 px below the lower card, and bends into the left side of
+  the target. Back edges are dashed. Edges have no arrow head: the left side of a card is in, the right side is out.
 - Edge label: `spawn <count>` for spawn (or `spawn` when count is empty), else the kind, then `callArgs`, `when`,
   `loop`, non-empty parts joined by ` · `. Longer than 60 characters: first 57 plus `...`; full text as tooltip.
   Labels show only on traced edges.
@@ -559,6 +571,11 @@ order, then problems from the graph.
   the next arg for the target is each token of `callArgs` (split on spaces) that is an arg id of the target node, or
   none when no token is. Each reached card is highlighted, and in it each OwnMd line whose args are empty, hold the
   arg, or when the arg is none. All else is dimmed.
+- Hover on a card: its top, right and bottom border and its edges (either way, 2 px) turn white in dark theme, text
+  color in light theme. Hover color wins over trace color: a traced edge turns that color too, and a traced or caller
+  card's ring as well. Dimming wins over hover: a dimmed card or edge stays dimmed. Leaving the card removes both.
+  A hovered card sits above other cards, and its edges move to the top of the edge layer, above all other edges.
+- Text in the map (cards, edge labels) cannot be selected; the problem list and legend can.
 - Callers: after the trace, every node that reaches the start node over edges, followed backward breadth-first with
   each node once, is shown as a caller card, and each edge on those paths with its label is shown as a caller edge.
   Caller cards and edges are not dimmed and are drawn dashed in the trace color. They are context only: the token

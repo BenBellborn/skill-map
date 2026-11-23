@@ -1,5 +1,6 @@
 """Places map cards in columns: one band of columns per kind, callers left of callees inside a band; then whole
-columns stack under others while that makes edges flow left to right with shorter spans."""
+columns stack under others while that makes edges flow left to right with shorter spans; last, single cards leave
+their band's column when that saves more flow cost than the cohesion they lose."""
 COLUMN_WIDTH = 380
 ROW_GAP = 28
 CARD_BASE_HEIGHT = 64
@@ -10,7 +11,11 @@ BANDS = (("command",), ("agent",), ("hook", "mod", "plugin"), ("shared",), ("ski
          ("builtin",), ("mcp",), ("tool",))
 RELAX_SWEEPS = 40
 FLAT_BANDS = {BANDS.index(("hook", "mod", "plugin")), BANDS.index(("mcp",))}  # one column each: inner edges set no layer
-BACKWARD_COST = 30  # stack cost of an edge that runs leftward or stays in its column, on top of its column span
+BACKWARD_COST = 100  # cost of an edge that runs leftward or stays in its column, on top of its column span
+# rule: place step only. In the stack step it packs whole bands into few columns, and edges turn backward.
+PASS_COST = 15  # cost per column an edge passes between its two cards
+# rule: below BACKWARD_COST, so one edge that runs back moves a card out of its band's column.
+COHESION_GAIN = 30  # gain per card that shares a column with the rest of its band
 
 
 def apply_layout(data: dict) -> None:
@@ -19,6 +24,7 @@ def apply_layout(data: dict) -> None:
     set_back_edges(data["edges"], children, get_root_ids(nodes))
     layers = build_layers(nodes, data["edges"])
     columns = stack_columns(build_columns(layers, data["edges"]), nodes, data["edges"])
+    columns = place_cards(columns, nodes, data["edges"])
     for column, blocks in enumerate(columns):
         set_column_positions(column, [nodes[i] for block in blocks for i in block])
     pull_linked_cards(columns, nodes, data["edges"])
@@ -132,10 +138,73 @@ def get_stack_height(blocks: list[list[str]], nodes: dict[str, dict]) -> int:
     return sum(get_card_height(nodes[i]) for i in ids) + ROW_GAP * max(len(ids) - 1, 0)
 
 
-def get_flow_cost(columns: list[list[list[str]]], links: list[tuple[str, str]]) -> int:
+def get_flow_cost(columns: list[list[list[str]]], links: list[tuple[str, str]], pass_cost: int = 0) -> int:
     column = {i: c for c, blocks in enumerate(columns) for block in blocks for i in block}
     spans = [column[dst] - column[src] for src, dst in links]
-    return sum(abs(s) + (BACKWARD_COST if s <= 0 else 0) for s in spans)
+    return sum(abs(s) + pass_cost * max(abs(s) - 1, 0) + (BACKWARD_COST if s <= 0 else 0) for s in spans)
+
+
+def place_cards(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> list[list[list[str]]]:
+    """Greedy: move the one card (never a command) to the other column that lowers flow cost less cohesion gain
+    most, while no column grows past the tallest column; repeat until no move helps."""
+    limit = max((get_stack_height(c, nodes) for c in columns), default=0)
+    links = [(e["src"], e["dst"]) for e in edges if e["src"] != e["dst"]]
+    band = {i: get_band(n) for i, n in nodes.items()}
+    score = lambda cols: get_flow_cost(cols, links, PASS_COST) - COHESION_GAIN * get_cohesion(cols, band)
+    while True:
+        best, best_score = None, score(columns)
+        for node_id in sorted(i for i, n in nodes.items() if n["kind"] != "command"):
+            for target in range(len(columns)):
+                trial = move_card(columns, node_id, target, links)
+                if trial is None or get_stack_height(get_column_of(trial, node_id), nodes) > limit:
+                    continue
+                trial_score = score(trial)
+                if trial_score < best_score:
+                    best, best_score = trial, trial_score
+        if best is None:
+            return columns
+        columns = best
+
+
+def get_cohesion(columns: list[list[list[str]]], band: dict[str, int]) -> float:
+    """Per band: pairs of its cards that share a column, over its size less 1, so a card that leaves a column
+    holding all the rest of its band costs 1."""
+    size: dict[int, int] = {}
+    for b in band.values():
+        size[b] = size.get(b, 0) + 1
+    total = 0.0
+    for blocks in columns:
+        count: dict[int, int] = {}
+        for i in (i for block in blocks for i in block):
+            count[band[i]] = count.get(band[i], 0) + 1
+        total += sum(n * (n - 1) / 2 / (size[b] - 1) for b, n in count.items() if size[b] > 1)
+    return total
+
+
+def move_card(columns: list[list[list[str]]], node_id: str, target: int,
+              links: list[tuple[str, str]]) -> list[list[list[str]]] | None:
+    """Copy with the card moved into the target column's block that holds a linked card, else its last block;
+    None when the card already sits there. Empty blocks and columns close up."""
+    if any(node_id in block for block in columns[target]):
+        return None
+    linked = {d if s == node_id else s for s, d in links if node_id in (s, d)}
+    trial = drop_card(columns, node_id)
+    home = next((block for block in trial[target] if linked & set(block)), trial[target][-1])
+    home.append(node_id)
+    return close_up(trial)
+
+
+def drop_card(columns: list[list[list[str]]], node_id: str) -> list[list[list[str]]]:
+    return [[[i for i in block if i != node_id] for block in blocks] for blocks in columns]
+
+
+def close_up(columns: list[list[list[str]]]) -> list[list[list[str]]]:
+    kept = ([block for block in blocks if block] for blocks in columns)
+    return [blocks for blocks in kept if blocks]
+
+
+def get_column_of(columns: list[list[list[str]]], node_id: str) -> list[list[str]]:
+    return next(blocks for blocks in columns if any(node_id in block for block in blocks))
 
 
 def set_column_positions(column: int, cards: list[dict]) -> None:
