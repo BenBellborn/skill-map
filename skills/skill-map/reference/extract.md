@@ -20,6 +20,7 @@ Brief with several units: do each in turn, one fragment and one reply line per u
 - Own flow only: what another skill's md loads goes in that skill's fragment.
 - Own `reference/*.md` files: list what they load too, under this skill.
 - `lwt`: copy brief's value exactly. Scan uses it to skip fresh skills.
+- Brief names problems (rerun): write whole fragment again, `lwt` from brief. Never patch old fragment; it holds `lwt` `broken`.
 
 ## Refs (`md` and `skill` values)
 - Other user skill: its folder name (`design-ext`, `todo-ext`, `fix`). Plugin skill: `<plugin>:<name>` (`skill-map:skill-map`).
