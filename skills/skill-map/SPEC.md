@@ -80,8 +80,8 @@ a skill file.
 - **Output:** standard output. One line per stale unit with files, skills first in skill order, then hooks, mods and
   plugins: `<unit name>`, tab, `<lwt>`, tab, the unit file paths relative to the unit folder with `/` separators,
   joined by `,`, tab, the unit kind (`skill`, `hook`, `mod`, `plugin`), tab, the unit folder as an absolute path with
-  `/` separators. No stale unit: the single line `none`. Exit code 0. Side effect: each fragment whose file stem names
-  no unit is deleted.
+  `/` separators, tab, the unit's fragment file path with `/` separators. No stale unit: the single line `none`. Exit
+  code 0. Side effect: each fragment file that is no unit's fragment file is deleted.
 - **Errors:** an unknown first argument fails argument parsing with a usage message and exit code 2.
 - **Example:**
 
@@ -282,7 +282,8 @@ problem: plan: unknown md reference/nope.md
 
 ### Fragment file
 
-- Path `<cache folder>/skills/<skill name>.json`, UTF-8, one JSON object of record Fragment.
+- Path `<cache folder>/skills/<skill name>.json`, each `:` in the name written as `--` (Windows file names hold no
+  `:`), UTF-8, one JSON object of record Fragment.
 - A file that does not parse, or parses to anything other than an object, counts as no fragment.
 - When render drops the `lwt` of a fragment, it writes the object again as JSON with 1-space indent, keys in their
   existing order, without `lwt`.
@@ -716,6 +717,10 @@ the page until a verifier agent has checked it against the skill's md files.
 - Plugins: each key `<name>@<market>` of `enabledPlugins` in `settings.json` with value true, whose first entry in
   `<root>/plugins/installed_plugins.json` key `plugins` names an existing `installPath`, is unit `plugin-<name>`,
   label `<name>`, folder that path.
+- Plugin skills: each `<installPath>/skills/<skill>/SKILL.md` is its own skill unit `<name>:<skill>`, folder that
+  skill folder, files its md files as for a skill; other skills and fragments name it that way. The plugin unit's files
+  leave out every file under such a skill folder. When both nodes exist, the plugin node gets a call edge to the skill
+  node, `when` `ships`.
 - Mod and plugin files: every file ending in `.py`, `.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.sh`, `.json` or `.md`,
   except names starting with `test_` or holding `.test.`, the names `tsconfig.json`, `package.json` and
   `package-lock.json`, and files under a folder named `node_modules`, `types`,
@@ -761,6 +766,11 @@ the page until a verifier agent has checked it against the skill's md files.
 - **SKILLMAP-18.4:** Given `plan` calls `tool:python`, `tool:no-such-tool-x`, and `tool:no-such-tool-y` with `when`
   `if installed`, when `render` runs, then only `missing tool no-such-tool-x` is a fix item, the optional tool still
   gets a card of kind `tool`, and tool cards sit in the rightmost column.
+- **SKILLMAP-18.5:** Given enabled plugin `ccm` with `ccm.py` and skill folder `skills/pane` (`SKILL.md`,
+  `reference/look.md`, `scripts/pane.py`), and `plan` calls `ccm:pane`, when `scan` runs, then unit `ccm:pane` (kind
+  `skill`, files `reference/look.md,SKILL.md`, fragment file `ccm--pane.json`) is listed and `plugin-ccm` keeps only
+  `ccm.py`; when `render` runs, then card `skill:ccm:pane` reads `/ccm:pane`, with edges from `plugin:ccm` and
+  `skill:plan`.
 
 ## Errors
 

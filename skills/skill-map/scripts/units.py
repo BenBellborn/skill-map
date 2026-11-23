@@ -29,6 +29,7 @@ class Unit:
     events: list[str] = field(default_factory=list)
     mcp: list[str] = field(default_factory=list)
     missing: list[tuple[str, str]] = field(default_factory=list)  # (problem text, repair prompt): a target that is gone
+    plugin: str = ""  # plugin unit that ships this skill; empty for a skill in ~/.claude/skills
 
     @property
     def node_id(self) -> str:
@@ -102,7 +103,8 @@ def find_mod_units(root: Path) -> list[Unit]:
 
 
 def find_plugin_units(root: Path) -> list[Unit]:
-    """Enabled plugins only; each is read at the install path the plugin list names."""
+    """Enabled plugins only; each is read at the install path the plugin list names. Each `skills/<name>/SKILL.md` of
+    a plugin is its own skill unit `<plugin>:<name>`, the name a user types after `/`; the plugin unit keeps the rest."""
     enabled = read_json(root / "settings.json").get("enabledPlugins")
     installed = read_json(root / "plugins" / "installed_plugins.json").get("plugins")
     if not (isinstance(enabled, dict) and isinstance(installed, dict)):
@@ -113,7 +115,7 @@ def find_plugin_units(root: Path) -> list[Unit]:
         first = installs[0] if isinstance(installs, list) and installs and isinstance(installs[0], dict) else {}
         folder = Path(str(first.get("installPath", "")))
         if first and folder.is_dir():
-            units.append(Unit(f"plugin-{short}", "plugin", folder, find_code_files(folder), short))
+            units += build_plugin_units(folder, short)
             continue
         unit = Unit(f"plugin-{short}", "plugin", root / "plugins", [], short)
         unit.missing.append(("not installed", f"Plugin `{key}` is enabled in ~/.claude/settings.json but not installed, so "
@@ -122,12 +124,19 @@ def find_plugin_units(root: Path) -> list[Unit]:
     return units
 
 
+def build_plugin_units(folder: Path, short: str) -> list[Unit]:
+    skills = sorted(p.parent for p in (folder / "skills").glob("*/SKILL.md"))
+    files = [p for p in find_code_files(folder) if not any(s in p.parents for s in skills)]
+    plugin = Unit(f"plugin-{short}", "plugin", folder, files, short)
+    return [plugin] + [Unit(f"{short}:{s.name}", "skill", s, find_md_files(s), plugin=plugin.name) for s in skills]
+
+
 def find_mcp_servers(root: Path) -> set[str]:
     """Servers of the user config file next to the root (user and project scope) and of each plugin's `.mcp.json`."""
     config = read_json(root.parent / ".claude.json")
     scopes = [config] + [p for p in (config.get("projects") or {}).values() if isinstance(p, dict)]
     servers = {name for scope in scopes if isinstance(scope.get("mcpServers"), dict) for name in scope["mcpServers"]}
-    for unit in find_plugin_units(root):
+    for unit in (u for u in find_plugin_units(root) if u.kind == "plugin"):
         data = read_json(unit.folder / ".mcp.json")
         servers |= set(data.get("mcpServers", data) if isinstance(data.get("mcpServers", data), dict) else {})
     return servers

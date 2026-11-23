@@ -371,6 +371,32 @@ def test_render_draws_hooks_mods_plugins_and_mcp(tmp_path, capsys):
     assert len(x(("hook", "mod", "plugin"))) == 1 and len(x(("mcp",))) == 1 and min(x(("command",))) == 0
 
 
+def test_plugin_skill_is_its_own_command_card_linked_from_its_plugin(tmp_path, capsys):
+    # SKILLMAP-18.5
+    root, cache = make_tree(tmp_path)
+    make_extras(root, tmp_path)
+    plugin = tmp_path / "plugin-ccm"
+    write(plugin / "skills/pane/SKILL.md", "pane skill")
+    write(plugin / "skills/pane/reference/look.md", "look")
+    write(plugin / "skills/pane/scripts/pane.py", "code")
+    lines = {line.split("\t")[0]: line.split("\t") for line in scan(capsys, root, cache)}
+    line = lines["ccm:pane"]
+    assert lines["plugin-ccm"][2] == "ccm.py"
+    assert line[2:4] == ["reference/look.md,SKILL.md", "skill"]
+    assert line[5].endswith("/skills/ccm--pane.json")
+    default_fragments(cache)
+    for name in ("hook-rules", "mod-clr", "plugin-ccm"):
+        fragment(cache, name)
+    write(cache / "skills/ccm--pane.json", json.dumps({"skill": "ccm:pane", "kind": "command", "args": [], "loads": [],
+                                                       "calls": [], "agents": []}))
+    fragment(cache, "plan", calls=[{"skill": "ccm:pane"}])
+    code, _, data = render(capsys, root, cache)
+    edges = {(e["src"], e["dst"]) for e in data["edges"]}
+    assert (code, node(data, "skill:ccm:pane")["label"]) == (0, "/ccm:pane")
+    assert {("plugin:ccm", "skill:ccm:pane"), ("skill:plan", "skill:ccm:pane")} <= edges
+    assert (cache / "skills/ccm--pane.json").is_file()
+
+
 def test_render_lists_missing_hook_mod_plugin_and_mcp_targets(tmp_path, capsys):
     # SKILLMAP-18.3
     root, cache = make_tree(tmp_path)

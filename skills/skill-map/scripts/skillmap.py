@@ -52,15 +52,17 @@ def run_scan(root: Path, cache: Path, full: bool) -> int:
     stale = [u for u in units.values() if u.files and (full or is_stale(root, cache, u))]
     for unit in stale:
         files = ",".join(p.relative_to(unit.folder).as_posix() for p in unit.files)
-        print(f"{unit.name}\t{build_lwt(unit)}@{scanned}\t{files}\t{unit.kind}\t{unit.folder.as_posix()}")
+        print(f"{unit.name}\t{build_lwt(unit)}@{scanned}\t{files}\t{unit.kind}\t{unit.folder.as_posix()}"
+              f"\t{get_fragment_path(cache, unit.name).as_posix()}")
     if not stale:
         print("none")
     return 0
 
 
 def delete_removed_fragments(cache: Path, units: dict[str, Unit]) -> None:
+    kept = {get_fragment_path(cache, name).name for name in units}
     for path in (cache / "skills").glob("*.json"):
-        if path.stem not in units:
+        if path.name not in kept:
             path.unlink()
 
 
@@ -101,7 +103,8 @@ def read_fragment(cache: Path, name: str) -> dict | None:
 
 
 def get_fragment_path(cache: Path, name: str) -> Path:
-    return cache / "skills" / f"{name}.json"
+    """A plugin skill's `:` is no valid Windows file name char, so `<plugin>:<skill>` is stored as `<plugin>--<skill>`."""
+    return cache / "skills" / f"{name.replace(':', '--')}.json"
 
 
 def build_lwt(unit: Unit) -> str:

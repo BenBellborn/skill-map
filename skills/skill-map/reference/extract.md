@@ -22,7 +22,7 @@ Brief with several units: do each in turn, one fragment and one reply line per u
 - `lwt`: copy brief's value exactly. Scan uses it to skip fresh skills.
 
 ## Refs (`md` and `skill` values)
-- Other user skill: its folder name (`design-ext`, `todo-ext`, `fix`).
+- Other user skill: its folder name (`design-ext`, `todo-ext`, `fix`). Plugin skill: `<plugin>:<name>` (`skill-map:skill-map`).
 - File in this skill folder: relative path (`reference/loop.md`, `KNOWLEDGE.md`).
 - Other file under `~/.claude`: `~/.claude/<path>` (`~/.claude/reference/error-review.md`,
   `~/.claude/skills/design-ext/reference/design-knowledge.md`). Agent type file: `~/.claude/agents/<type>.md`.

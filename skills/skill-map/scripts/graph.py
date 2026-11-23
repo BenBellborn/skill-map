@@ -70,6 +70,13 @@ class GraphBuilder:
             if unit.node_id in self.nodes:
                 for server in unit.mcp:
                     self.add_ref(Ref(unit.name, unit.node_id, f"mcp:{server}", "call", {"when": "matcher"}))
+            self.add_plugin_edge(unit)
+
+    def add_plugin_edge(self, unit: Unit) -> None:
+        """A plugin's card links to each skill it ships."""
+        plugin = self.units.get(unit.plugin)
+        if plugin and plugin.node_id in self.nodes and unit.node_id in self.nodes:
+            self.add_ref(Ref(plugin.name, plugin.node_id, unit.name, "call", {"when": "ships"}))
 
     def add_refs(self, owner: str, loader: str, data: dict) -> None:
         for entry in data.get("loads", []):
