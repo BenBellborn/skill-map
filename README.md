@@ -34,7 +34,7 @@ The page also counts the tokens a run costs, and lists where you can save some.
 - **Click a card or an argument:** only that flow stays lit; the cards that call it show dashed.
 - **Flow totals:** after a click, the top-left card shows tokens, estimated time and fixes for that flow alone.
 - **Click a kind in the legend:** every card of that kind is lit.
-- **Token saver & fix card:** the top 5 token savings, and every fault found.
+- **Savings card:** the top 5 token savings, and every fault found.
 - **Faults:** a missing md file, a hook script that is gone, an MCP server not set up.
 - **Prompts:** each saving or fault has a prompt to copy into Claude.
 - **Zoom and pan:** mouse wheel, drag, the `+` and `-` buttons, `0` to fit. `Esc` or a click on empty space clears a trace.

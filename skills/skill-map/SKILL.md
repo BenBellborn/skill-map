@@ -23,7 +23,7 @@ Cache: `~/.claude/cache/skill-map/` (`skills/<name>.json`, `skill-map.html`).
    - Brief: unit name, `lwt`, kind, folder, file list, output path (scan columns).
    - Brief ends: "Read `${CLAUDE_SKILL_DIR}/reference/extract.md` and follow it."
 3. `skillmap.py render`: checks fragment shape and refs, writes and opens `skill-map.html`, prints path.
-   - Page: "Token saver & fix" card, top left: total tok, est. time, skill fixes, top 5 token savings (`scripts/cost.py`).
+   - Page: Savings card (no title), top left: total tok, est. time, skill fixes, top 5 token savings (`scripts/cost.py`).
    - Each item: copyable AI prompt; red marks its card. Click card or arg: that flow plus callers (dashed); no trace: whole map.
    - Then one `problem: <skill>: <text>` line per fault (exit 1); faulty fragment gets `lwt` `broken`, so next scan lists it.
    - Page shows only hints a verifier marked `ok` (`verdicts.json`). One `unchecked hint: <key>\t<skill>\t<prompt>` line per

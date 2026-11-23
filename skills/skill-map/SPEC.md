@@ -276,7 +276,7 @@ problem: plan: unknown md reference/nope.md
 | nodes | list of Node | yes | empty list | creation order | 1 | see Node |
 | edges | list of Edge | yes | empty list | creation order | 2 | see Edge |
 | problems | list of Problem | yes | empty list | one per problem, in report order, except `no fragment, run scan` and `changed since the map was drawn`: `/skill-map` re-reads those skills before `render`, so the page never shows them | 3 | see Problem |
-| cost | Cost | yes | see Cost | constants the Token saver & fix card uses | 4 | `{"agentBase": 48000, "msPerTok": 2}` |
+| cost | Cost | yes | see Cost | constants the savings card uses | 4 | `{"agentBase": 48000, "msPerTok": 2}` |
 
 ## File formats
 
@@ -548,11 +548,11 @@ order, then problems from the graph.
 - Edge label: `spawn <count>` for spawn (or `spawn` when count is empty), else the kind, then `callArgs`, `when`,
   `loop`, non-empty parts joined by ` · `. Longer than 60 characters: first 57 plus `...`; full text as tooltip.
   Labels show only on traced edges.
-- The Token saver & fix card (R16) shows top left; problems show only in it, as fix items. Legend at the bottom
+- The savings card (R16) shows top left; problems show only in it, as fix items. Legend at the bottom
   left.
 - A card of node `skill:<skill>` with one or more problems shows a small red `!` badge after its label; its tooltip
-  holds the `prompt` of each problem, one per line. A problem whose skill has no card shows only in the Token saver &
-  fix card.
+  holds the `prompt` of each problem, one per line. A problem whose skill has no card shows only in the savings
+  card.
 - Colours follow the light or dark system scheme; an attribute `data-theme` of `light` or `dark` on the root element
   forces one. The trace highlight is teal, never red: red marks only savings hints and problems.
 
@@ -591,7 +591,7 @@ order, then problems from the graph.
   traces.
 - Wheel zooms around the pointer by 1.1 per step; buttons `+` and the minus button zoom by 1.2 around the window
   middle. Scale stays from 0.15 to 3.
-- Fit (button, key `0`, and on each load or reload): top is the larger of 60 px and the bottom of the Token saver & fix
+- Fit (button, key `0`, and on each load or reload): top is the larger of 60 px and the bottom of the savings
   card plus 12 px; bottom is the top of the legend minus 12 px. Scale is the smaller of
   `(window width - 80) / content width` and `(bottom - top) / (content height + 60)`, held from 0.05 to 1.2; offset
   40 px left, top px from the top. So every card shows between the top bar and the legend.
@@ -643,7 +643,7 @@ The extraction agent reads each listed md of the skill and writes one fragment:
 - **SKILLMAP-15.1:** Given a skill text that loads `design-ext` before work, when the agent writes the fragment, then
   `loads` holds `{"md": "design-ext", "when": "", "args": []}`.
 
-### R16 Token cost and the Token saver & fix card
+### R16 Token cost and the savings card
 
 The page data gets each agent's runs, the savings hints of each node and OwnMd line, and the Cost constants. Token
 counts in hint text show as `<n> tok` below 1000 and as `<n/1000 with one decimal>k tok` from 1000 on.
@@ -665,8 +665,8 @@ counts in hint text show as `<n> tok` below 1000 and as `<n/1000 with one decima
   `agent:<owner>:<agent id>`.
 - A hint that saves under 2000 tok is dropped: it shows in no save item and gets no red mark.
 
-The Token saver & fix card sits at the top left, beside the zoom buttons, at most 900 px wide and 40% of the window
-high (it scrolls inside). Its head is `Token saver & fix`, with a `Copy all` button when it lists any item. Below it:
+The savings card sits at the top left, beside the zoom buttons, at most 900 px wide and 40% of the window
+high (it scrolls inside). It has no title. Its head holds a `Copy all` button, right-aligned, when it lists any item. Below it:
 1. With no trace: `Whole map · click a card or arg for its tokens, time and fixes`. With a trace:
    `<label>: ~<total> tok read · est. <time>`, then ` · <starts> agent starts` when starts is not 0. Label is the
    card label, plus ` [<arg>]` for a trace from an arg. Its tooltip names agentBase, msPerTok and that parallel
@@ -696,7 +696,7 @@ highlighted agent's start ctx times msPerTok once. Time shows as `~<n> min` (rou
 - **SKILLMAP-16.3:** Given OwnMd lines of tok 2000 with `when` empty, with `when` `loop`, with args `all`, and one of
   tok 1500, when `render` runs, then only the first line has a hint, saving 2000.
 - **SKILLMAP-16.4:** Given the viewer clicks `/skill-map` whose one agent has runs 5, when the trace ends, then the
-  Token saver & fix card shows the total with `5 agent starts` and one save item with a `Copy` button for that
+  savings card shows the total with `5 agent starts` and one save item with a `Copy` button for that
   agent.
 - **SKILLMAP-16.5:** Given command skills with tok 2999 and 3000 and OwnMd lines of tok 1999 and 2000 read on every
   run, when `render` runs, then only the skill with tok 3000 and the line of tok 2000 have a hint, each saving 2000.

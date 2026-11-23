@@ -83,8 +83,7 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
   align-items: flex-start; pointer-events: none; }
 #status { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; font-size: 12px; max-width: min(100%, 900px); max-height: 40vh; overflow-y: auto; pointer-events: auto; }
-#status header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-#status h2 { margin: 0; font-size: 13px; }
+#status header { display: flex; justify-content: flex-end; }
 #status .total { font-weight: 600; margin-top: 2px; }
 #status .hint { color: var(--muted); }
 #status .item { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; margin-top: 6px; padding-top: 6px;
@@ -299,10 +298,12 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     document.querySelectorAll(".save").forEach(x => x.classList.remove("save"));
     const traced = startId !== null, flow = measureFlow(traced);
     const items = [...findFixItems(traced), ...flow.hints.sort((a, b) => b.save - a.save).slice(0, 5)];
-    const header = el("header");
-    header.append(el("h2", "", "Token saver & fix"));
-    if (items.length) header.append(buildCopyButton("Copy all", () => buildPromptList(items)));
-    status.append(header, traced ? buildTotal(flow, startId, startArg)
+    if (items.length) {
+      const header = el("header");
+      header.append(buildCopyButton("Copy all", () => buildPromptList(items)));
+      status.append(header);
+    }
+    status.append(traced ? buildTotal(flow, startId, startArg)
       : el("div", "hint", "Whole map · click a card or arg for its tokens, time and fixes"));
     for (const item of items) {
       const row = el("div", "item");
