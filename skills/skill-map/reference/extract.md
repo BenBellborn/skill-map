@@ -54,7 +54,10 @@ Brief with several units: do each in turn, one fragment and one reply line per u
 - `summary`: ≤8 words.
 - `args`: only args that change loads, calls, agents or loop. None: `[]`.
 - Free-text or number arg: one entry, `id` `n`, label `#`.
-- `callArgs`: args passed in call, space-separated; token equal to callee arg id lets map follow that arg.
+- Model arg (`[model:effort]`, sets agent model): `id` `model`, label `model:effort`. Agent it sets: `modelArg` `model`,
+  `model`/`effort` the default.
+- `callArgs`: args passed in call, space-separated, as typed (`sonnet:high bugs-only`, `todo:3`). Map follows token equal
+  to callee arg id, `<id>:<value>`, or model value (callee arg `model`).
 - `agents`: each distinct spawn (`Agent` tool, `subagent_type`, finder, verifier, worker).
   - `id`: short unique name. `type`: `subagent_type` value.
   - `count`: agents started (cap or number). `items`: work items one agent takes ("1", "2-4", "≤4 per batch").

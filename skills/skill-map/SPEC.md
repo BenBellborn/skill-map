@@ -162,7 +162,7 @@ problem: plan: unknown md reference/nope.md
 
 | Name | Type | Required | Default | Values | Order | Example |
 |---|---|---|---|---|---|---|
-| id | text | yes | none | arg id; free text or number arg uses `n` | 1 | `all` |
+| id | text | yes | none | arg id; free text or number arg uses `n`; the model and effort override arg uses `model` | 1 | `all` |
 | label | text | no | the id | shown on the arg button; free text or number arg uses `#` | 2 | `all` |
 | note | text | no | empty | button tooltip | 3 | `queue, 5 workers max, loop` |
 
@@ -199,6 +199,7 @@ problem: plan: unknown md reference/nope.md
 | loads | list of Load | no | empty list | md files the agent reads at start | 9 | `[{"md": "design-ext", "when": ""}]` |
 | calls | list of Call | no | empty list | skills the agent runs | 10 | `[]` |
 | items | text | no | empty | work items one agent takes; unknown: empty | 11 | `2-4` |
+| modelArg | text | no | empty | id of the fragment arg that sets the agent model and effort; `model` and `effort` then hold the default | 12 | `model` |
 
 ### Node
 
@@ -219,6 +220,7 @@ problem: plan: unknown md reference/nope.md
 | runs | integer | agents only | 1 | first whole number in count, at least 1; 1 when count has no number | 13 | `5` |
 | hints | list of Hint | yes | empty list | savings hints of the node (R16) | 14 | see Hint |
 | items | text | agents only | empty | the agent entry `items` | 15 | `1` |
+| modelArg | text | agents only | empty | label (or id) of the owner arg the agent entry `modelArg` names | 16 | `model:effort` |
 
 ### OwnMd
 
@@ -453,13 +455,19 @@ Each agent entry becomes node `agent:<owner>:<id>` of kind `agent`, label the id
 `model` and `effort` joined by `:` with empty parts left out, count and items. Its tok is the start ctx: the bytes of each
 load target (a skill name counts its `SKILL.md`, an outside ref counts 0, a missing file counts 0) plus the bytes of
 `<root>/agents/<type>.md`, divided by 4, rounded down. A spawn edge goes from the skill node to the agent node and
-carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls get the agent node as loader.
+carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls get the agent node as loader. An agent
+`modelArg` puts the label (or id) of the owner arg with that id in node `modelArg`; no owner arg has that id: problem
+`agent <id> modelArg <arg> is no arg`.
 
 - **SKILLMAP-9.1:** Given agent `worker` of `fix` with type `fix-worker` (40 bytes), model `opus`, effort `high`,
   loading `design-ext` (`SKILL.md` 800 bytes) and `reference/loop.md` (400 bytes), when `render` runs, then node
   `agent:fix:worker` has tok 310 and model `opus:high`.
 - **SKILLMAP-9.2:** Given the agent `worker` with args `["all"]`, when `render` runs, then the edge into
   `agent:fix:worker` has kind `spawn` and args `["all"]`.
+- **SKILLMAP-9.3:** Given `plan` with arg `model` labelled `model:effort` and agent `finder` with modelArg `model`,
+  when `render` runs, then node `agent:plan:finder` has modelArg `model:effort`.
+- **SKILLMAP-9.4:** Given agent `finder` of `plan` with modelArg `model` and `plan` without arg `model`, when `render`
+  runs, then it prints `problem: plan: agent finder modelArg model is no arg` and exits 1.
 
 ### R10 Layout
 
@@ -534,7 +542,8 @@ order, then problems from the graph.
 - Card colour by kind: command, shared, agent, md, builtin, hook, mod, plugin, mcp, tool; every other kind uses the
   outside colour. An md node with `shared`
   true has a dashed border.
-- Card head: label, and a tag: for an agent the model and count joined by ` · `; for md `shared md` or `md`; for a
+- Card head: label (agent: `<label> · <owner>`, owner from the node id), and a tag: for an agent the model and count joined by ` · `; an agent with a modelArg shows
+  `<model> ← [<modelArg>]` as its model; for md `shared md` or `md`; for a
   skill target `skill`; else the kind.
 - Meta line: summary and `~<tok> tok md` (when tok is not 0) joined by ` · `.
 - OwnMd lines: `<name> ~<tok>` and the `when` text right-aligned; tooltip the `when`.
@@ -564,13 +573,19 @@ order, then problems from the graph.
 
 ### R13 Page trace and view
 
-- Click on a card: trace from that node with no arg. Click on an arg button: trace from that node under that arg;
+- Click on a card: trace from that node with all args. Click on an arg button: trace from that node under that arg;
   the button is highlighted.
-- Trace: breadth-first over pairs of node and arg, each pair once. An edge from the node matches when the arg is
-  none, the edge args are empty, or the edge args hold the arg. Each matching edge and its label are highlighted;
-  the next arg for the target is each token of `callArgs` (split on spaces) that is an arg id of the target node, or
-  none when no token is. Each reached card is highlighted, and in it each OwnMd line whose args are empty, hold the
-  arg, or when the arg is none. All else is dimmed.
+- Trace: breadth-first over states of node, arg set (all, or a set of arg ids) and model value, each state once. An
+  entry (edge or OwnMd line) matches when the set is all, the entry args are empty, or they share an arg with the
+  set. Each matching edge and its label are highlighted. A spawn edge passes the state's set and model value to the
+  agent. A load or call edge passes the set of callee arg ids its `callArgs` tokens (split on spaces) name: a token
+  equal to an arg id, a model value (`opus`, `sonnet`, `haiku`, `fable`, optional `:<effort>`) naming arg `model`
+  and setting the model value (token `model` forwards the caller's model value), or `<id>:<value>` naming arg `id`. No token names an arg: the empty set, so only
+  entries without args match. Each reached card and each matching OwnMd line is highlighted. All else is dimmed.
+- Arg buttons in a trace: on each reached card other than the start card, the buttons of passed args are highlighted
+  and the others are hidden; a card reached with all args, and the start card, keep every button. An agent card with
+  a modelArg reached with model values shows those values, joined by ` | `, in place of its default model. Clearing
+  the trace restores buttons and tags.
 - Hover on a card: its top, right and bottom border and its edges (either way, 2 px) turn white in dark theme, text
   color in light theme. Hover color wins over trace color: a traced edge turns that color too, and a traced or caller
   card's ring as well. Dimming wins over hover: a dimmed card or edge stays dimmed. Leaving the card removes both.
@@ -598,7 +613,11 @@ order, then problems from the graph.
 
 - **SKILLMAP-13.1:** Given `fix` with arg `all` calls `plan` with `callArgs` `3` and `plan` has no arg `3`, when the
   viewer clicks `[all]` on `/fix`, then the call edge and the `/plan` card are highlighted and the trace continues
-  from `plan` with no arg.
+  from `plan` with the empty arg set.
+- **SKILLMAP-13.3:** Given `review-duel` calls `review-ext` with `callArgs` `sonnet:high bugs-only`, and `review-ext`
+  has args `model`, `bugs-only`, `max` and agent `finder` with model `opus` and modelArg `model:effort`, when the viewer
+  clicks the `/review-duel` card, then on `review-ext` `[bugs-only]` and `[model:effort]` are highlighted, `[max]` is
+  hidden, md lines under `max` are dimmed, and the `finder` tag reads `sonnet:high`.
 - **SKILLMAP-13.2:** Given a map with agent cards, when the viewer clicks `agent` in the legend, then every agent card
   is highlighted and every other card is dimmed; a second click clears it.
 

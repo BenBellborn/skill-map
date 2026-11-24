@@ -11,7 +11,7 @@ OPTIONAL_WHEN = "if installed"  # `when` of a tool ref the skill runs only when 
 TOKEN_BYTES = 4
 LIST_FIELDS = ("args", "agents")
 REF_FIELDS = (("loads", "md"), ("calls", "skill"))
-TEXT_KEYS = ("when", "callArgs", "loop", "type", "model", "effort", "count", "items")
+TEXT_KEYS = ("when", "callArgs", "loop", "type", "model", "effort", "count", "items", "modelArg")
 
 
 @dataclass
@@ -50,15 +50,10 @@ class GraphBuilder:
             self.problems += [(name, text) for text in shape_problems]
             return
         unit = self.units[name]
-        skill = unit.kind == "skill"
-        self.nodes[unit.node_id] = {"id": unit.node_id, "kind": data.get("kind", "command") if skill else unit.kind,
-                                    "label": format_skill_label(name, data) if skill else unit.label,
-                                    "summary": " · ".join(filter(None, unit.events + [data.get("summary", "")])),
-                                    "args": data.get("args", []), "mds": [],
-                                    "tok": get_file_tok(unit.folder / "SKILL.md") if skill else 0}
+        self.nodes[unit.node_id] = build_unit_node(unit, data)
         self.add_refs(name, unit.node_id, data)
         for agent in data.get("agents", []):
-            self.add_agent(name, unit.node_id, agent)
+            self.add_agent(name, unit.node_id, agent, data.get("args", []))
 
     def add_settings_facts(self) -> None:
         """settings.json facts need no agent: a hook that runs a tool gets a bare card, and an `mcp__<server>__` matcher an edge."""
@@ -134,14 +129,19 @@ class GraphBuilder:
             return self.root / ref[len(HOME_PREFIX):]
         return self.units[owner].folder / ref
 
-    def add_agent(self, owner: str, skill_id: str, agent: dict) -> None:
+    def add_agent(self, owner: str, skill_id: str, agent: dict, args: list[dict]) -> None:
+        """`modelArg` names the owner's arg that sets the agent's model; the card shows that arg's label."""
         agent_id = f"agent:{owner}:{agent['id']}"
-        model = ":".join(part for part in (agent.get("model", ""), agent.get("effort", "")) if part)
-        self.nodes[agent_id] = {"id": agent_id, "kind": "agent", "label": agent["id"], "summary": agent.get("type", ""),
-                                "model": model, "count": agent.get("count", ""), "items": agent.get("items", ""), "mds": [], "args": [],
-                                "tok": self.get_agent_tok(owner, agent)}
+        node = build_agent_node(agent_id, agent, self.get_model_arg_label(owner, agent, args))
+        self.nodes[agent_id] = node | {"tok": self.get_agent_tok(owner, agent)}
         self.refs.append(Ref(owner, skill_id, agent_id, "spawn", agent))
         self.add_refs(owner, agent_id, agent)
+
+    def get_model_arg_label(self, owner: str, agent: dict, args: list[dict]) -> str:
+        label = next((a.get("label") or a["id"] for a in args if a["id"] == agent.get("modelArg")), "")
+        if agent.get("modelArg") and not label:
+            self.problems.append((owner, f"agent {agent['id']} modelArg {agent['modelArg']} is no arg"))
+        return label
 
     def get_agent_tok(self, owner: str, agent: dict) -> int:
         paths = [self.find_load_path(owner, entry["md"]) for entry in agent.get("loads", [])]
@@ -220,6 +220,21 @@ def find_ref_problems(data: dict) -> list[str]:
 
 def build_missing(owner: str, text: str, prompt: str, node_id: str) -> dict:
     return {"skill": owner, "text": text, "prompt": prompt, "node": node_id}
+
+
+def build_unit_node(unit: Unit, data: dict) -> dict:
+    skill = unit.kind == "skill"
+    return {"id": unit.node_id, "kind": data.get("kind", "command") if skill else unit.kind,
+            "label": format_skill_label(unit.name, data) if skill else unit.label,
+            "summary": " · ".join(filter(None, unit.events + [data.get("summary", "")])),
+            "args": data.get("args", []), "mds": [], "tok": get_file_tok(unit.folder / "SKILL.md") if skill else 0}
+
+
+def build_agent_node(agent_id: str, agent: dict, model_arg: str) -> dict:
+    model = ":".join(part for part in (agent.get("model", ""), agent.get("effort", "")) if part)
+    return {"id": agent_id, "kind": "agent", "label": agent["id"], "summary": agent.get("type", ""), "model": model,
+            "modelArg": model_arg, "count": agent.get("count", ""), "items": agent.get("items", ""), "mds": [],
+            "args": []}
 
 
 def format_skill_label(name: str, data: dict) -> str:

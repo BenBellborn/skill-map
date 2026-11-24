@@ -67,6 +67,7 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
 .edge.hover { stroke-width: 2; }
 .edge.hover, .focus .edge.hover { stroke: var(--hover); }
 .arg.on { background: var(--hl); border-color: var(--hl); color: #fff; }
+.focus .arg.off { display: none; }
 .card.save { box-shadow: 0 0 0 3px var(--save); }
 .focus li.save { color: var(--save); font-weight: 600; }
 #bar { position: fixed; top: 12px; right: 16px; display: flex; gap: 6px; z-index: 2; }
@@ -126,7 +127,9 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
 
   const OWN_KINDS = ["command", "shared", "agent", "md", "builtin", "hook", "mod", "plugin", "mcp", "tool"];
   const kindClass = n => OWN_KINDS.includes(n.kind) ? `k-${n.kind}` : "k-outside";
-  const tagText = n => n.kind === "agent" ? [n.model, n.count].filter(Boolean).join(" · ")
+  // rule: an agent whose model comes from an arg shows the default and that arg; a trace puts the passed value in.
+  const modelText = n => n.modelArg ? `${n.model} ← [${n.modelArg}]`.trim() : n.model;
+  const tagText = (n, model) => n.kind === "agent" ? [model || modelText(n), n.count].filter(Boolean).join(" · ")
     : n.kind === "md" ? (n.shared ? "shared md" : "md") : n.kind === "skill" ? "skill" : n.kind;
 
   function el(tag, cls, text) {
@@ -140,7 +143,9 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     const card = el("div", `card ${kindClass(n)}${n.kind === "md" && n.shared ? " shared-md" : ""}`);
     card.style.left = n.x + "px"; card.style.top = n.y + "px";
     const head = el("h3");
-    head.append(el("span", "", n.label), el("span", "tag", tagText(n)));
+    // rule: an agent card names its owner, so two skills' agents with one id stay apart (`verifier · review-ext`).
+    const title = n.kind === "agent" ? `${n.label} · ${n.id.slice(6, n.id.lastIndexOf(":"))}` : n.label;
+    head.append(el("span", "", title), el("span", "tag", tagText(n)));
     card.append(head);
     const meta = [n.summary, n.tok ? `~${n.tok} tok md` : ""].filter(Boolean).join(" · ");
     if (meta) card.append(el("div", "meta", meta));
@@ -241,35 +246,68 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     }
   }
 
-  function childArgs(e) {
-    const ids = new Set((nodes.get(e.dst).args || []).map(a => a.id));
-    const passed = (e.callArgs || "").split(/\s+/).filter(t => ids.has(t));
-    return passed.length ? passed : [null];
+  // rule: a model value (`sonnet:high`, `opus`) passes the callee arg with id `model`; `todo:3` passes arg `todo`.
+  const MODEL_TOKEN = /^(opus|sonnet|haiku|fable)(:[a-z]+)?$/;
+
+  function matchArg(token, ids) {
+    if (ids.has(token)) return token;
+    if (MODEL_TOKEN.test(token)) return ids.has("model") ? "model" : null;
+    const prefix = token.split(":")[0];
+    return token.includes(":") && ids.has(prefix) ? prefix : null;
   }
 
-  function edgeMatches(e, arg) {
-    return arg === null || !e.args || e.args.length === 0 || e.args.includes(arg);
+  // rule: a spawned agent runs under its spawner's args; a called or loaded skill runs only under the args the call passes.
+  function nextState(e, state) {
+    if (e.kind === "spawn") return { id: e.dst, args: state.args, model: state.model };
+    const ids = new Set((nodes.get(e.dst).args || []).map(a => a.id)), args = new Set();
+    let model = null;
+    for (const token of (e.callArgs || "").split(/\s+/)) {
+      const id = matchArg(token, ids);
+      if (id) args.add(id);
+      // rule: token `model` forwards the caller's own model arg: its value, if the trace has one.
+      if (id === "model") model = MODEL_TOKEN.test(token) ? token : state.model;
+    }
+    return { id: e.dst, args, model };
+  }
+
+  // rule: args null (card click) matches every entry; an empty set matches only entries without args.
+  function argsMatch(entryArgs, args) {
+    return args === null || !entryArgs || entryArgs.length === 0 || entryArgs.some(a => args.has(a));
   }
 
   function trace(startId, startArg) {
     clearTrace();
     document.body.classList.add("focus");
-    const seen = new Set(), queue = [[startId, startArg]];
-    if (startArg !== null) argButtons.get(`${startId}|${startArg}`).classList.add("on");
+    const seen = new Set(), reached = new Map();
+    const queue = [{ id: startId, args: startArg === null ? null : new Set([startArg]), model: null }];
     while (queue.length) {
-      const [id, arg] = queue.shift();
-      const key = `${id}|${arg}`;
+      const state = queue.shift();
+      const key = `${state.id}|${state.args ? [...state.args].sort().join(",") : "*"}|${state.model}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      markCard(id, arg);
+      markCard(state, reached);
       for (const e of data.edges) {
-        if (e.src !== id || !edgeMatches(e, arg)) continue;
+        if (e.src !== state.id || !argsMatch(e.args, state.args)) continue;
         edgeEls.get(e.id).forEach(x => x.classList.add("on"));
-        childArgs(e).forEach(arg => queue.push([e.dst, arg]));
+        queue.push(nextState(e, state));
       }
     }
+    showPassedArgs(reached, startId);
     markCallers(startId);
     showStatus(startId, startArg);
+  }
+
+  // rule: a traced card shows only the args its callers pass, marked; the start card keeps every arg button.
+  function showPassedArgs(reached, startId) {
+    for (const [id, r] of reached) {
+      const n = nodes.get(id);
+      for (const arg of n.args) {
+        const button = argButtons.get(`${id}|${arg.id}`), on = r.args.has(arg.id);
+        button.classList.toggle("on", on);
+        button.classList.toggle("off", !on && id !== startId && !r.all);
+      }
+      if (n.modelArg && r.models.size) cards.get(id).querySelector(".tag").textContent = tagText(n, [...r.models].join(" | "));
+    }
   }
 
   // rule: callers show as context only: class `caller`, never `on`, so flow tokens, fixes and hints stay the start's own.
@@ -401,13 +439,15 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     return ins.length > 0 && ins.every(e => e.kind === "load" && nodes.get(e.src).kind === "agent");
   }
 
-  function markCard(id, arg) {
-    const card = cards.get(id);
+  function markCard(state, reached) {
+    const card = cards.get(state.id);
     card.classList.add("on");
-    for (const li of card.querySelectorAll("li")) {
-      const args = JSON.parse(li.dataset.args);
-      if (arg === null || args.length === 0 || args.includes(arg)) li.classList.add("on");
-    }
+    for (const li of card.querySelectorAll("li")) if (argsMatch(JSON.parse(li.dataset.args), state.args)) li.classList.add("on");
+    const r = reached.get(state.id) || { all: false, args: new Set(), models: new Set() };
+    r.all = r.all || state.args === null;
+    if (state.args) state.args.forEach(a => r.args.add(a));
+    if (state.model) r.models.add(state.model);
+    reached.set(state.id, r);
   }
 
   // rule: a kind click marks every card of that kind; a second click on it clears, as Esc does.
@@ -422,7 +462,8 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
 
   function clearTrace() {
     document.body.classList.remove("focus");
-    document.querySelectorAll(".on, .save, .caller").forEach(x => x.classList.remove("on", "save", "caller"));
+    document.querySelectorAll(".on, .off, .save, .caller").forEach(x => x.classList.remove("on", "off", "save", "caller"));
+    data.nodes.filter(n => n.modelArg).forEach(n => { cards.get(n.id).querySelector(".tag").textContent = tagText(n); });
     showStatus(null, null);
   }
 

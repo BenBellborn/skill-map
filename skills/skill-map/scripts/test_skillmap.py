@@ -276,6 +276,25 @@ def test_spawn_edge_carries_agent_args(tmp_path, capsys):
     assert spawn["kind"] == "spawn" and spawn["args"] == ["all"]
 
 
+def test_agent_model_arg_shows_owner_arg_label(tmp_path, capsys):
+    # SKILLMAP-9.3
+    root, cache = make_tree(tmp_path)
+    default_fragments(cache)
+    fragment(cache, "plan", args=[{"id": "model", "label": "model:effort"}],
+             agents=[{"id": "finder", "model": "opus", "modelArg": "model"}])
+    code, _, data = render(capsys, root, cache)
+    assert code == 0 and node(data, "agent:plan:finder")["modelArg"] == "model:effort"
+
+
+def test_agent_model_arg_without_owner_arg_is_problem(tmp_path, capsys):
+    # SKILLMAP-9.4
+    root, cache = make_tree(tmp_path)
+    default_fragments(cache)
+    fragment(cache, "plan", agents=[{"id": "finder", "model": "opus", "modelArg": "model"}])
+    code, out, _ = render(capsys, root, cache)
+    assert code == 1 and "problem: plan: agent finder modelArg model is no arg" in out
+
+
 def test_render_reports_unknown_md_path(tmp_path, capsys):
     # SKILLMAP-7.1
     root, cache = make_tree(tmp_path)
