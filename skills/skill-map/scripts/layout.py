@@ -1,8 +1,11 @@
 """Places map cards in columns: one band of columns per kind, callers left of callees inside a band; then whole
 columns stack under others while that makes edges flow left to right with shorter spans; last, single cards leave
-their band's column when that saves more flow cost than the cohesion they lose."""
+their band's column when that saves more flow cost than the cohesion they lose. Rubber bands then sort each column,
+and each column becomes a tight stack in the order that scores best."""
+from usage import get_edge_usage
+
 COLUMN_WIDTH = 380
-ROW_GAP = 28
+ROW_GAP = 8  # rule: same gap as the page's column stack
 CARD_BASE_HEIGHT = 64
 LINE_HEIGHT = 18
 # rule: commands own the far-left band. Hooks, mods and plugins sit after agents: they call shared skills, md and
@@ -16,6 +19,13 @@ BACKWARD_COST = 100  # cost of an edge that runs leftward or stays in its column
 PASS_COST = 15  # cost per column an edge passes between its two cards
 # rule: below BACKWARD_COST, so one edge that runs back moves a card out of its band's column.
 COHESION_GAIN = 30  # gain per card that shares a column with the rest of its band
+# Polish step gains, in px of edge height, per path.
+# rule: page edges join points 18 px below both card tops: level edge = same top.
+SIBLING_GAIN = 200  # gain per two neighbor cards in a column with a shared caller
+SIBLING_FLOOR = 5000  # least gain of such two cards, so unused siblings still join their group
+LEVEL_GAIN = 50  # gain per level edge between two columns
+ORDER_COST = 10  # cost per path of difference when a less used card sits above a more used one with the same caller
+POLISH_PASSES = 4
 
 
 def apply_layout(data: dict) -> None:
@@ -27,7 +37,10 @@ def apply_layout(data: dict) -> None:
     columns = place_cards(columns, nodes, data["edges"])
     for column, blocks in enumerate(columns):
         set_column_positions(column, [nodes[i] for block in blocks for i in block])
-    pull_linked_cards(columns, nodes, data["edges"])
+    links = get_links(data["edges"])
+    pull_linked_cards(columns, nodes, links)
+    improve_columns(columns, nodes, data["edges"])
+    set_top_to_zero(nodes)
 
 
 def get_root_ids(nodes: dict[str, dict]) -> list[str]:
@@ -214,26 +227,169 @@ def set_column_positions(column: int, cards: list[dict]) -> None:
         y += get_card_height(card) + ROW_GAP
 
 
-def pull_linked_cards(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> None:
-    """Rubber bands: each edge pulls the centers of its two cards toward the same height. Sweeps alternate left to
-    right and right to left; each block re-sorts its cards by wanted y, blocks keep their stack order, then the column
-    keeps the row gap. Top card ends at y 0."""
+def get_links(edges: list[dict]) -> dict[str, list[str]]:
+    """Linked cards per card, both edge ways, self edges left out."""
     links: dict[str, list[str]] = {}
     for edge in edges:
         if edge["src"] != edge["dst"]:
             links.setdefault(edge["src"], []).append(edge["dst"])
             links.setdefault(edge["dst"], []).append(edge["src"])
-    center = lambda i: nodes[i]["y"] + get_card_height(nodes[i]) / 2
+    return links
+
+
+def get_callers(edges: list[dict]) -> dict[str, set[str]]:
+    callers: dict[str, set[str]] = {}
+    for edge in edges:
+        if edge["src"] != edge["dst"]:
+            callers.setdefault(edge["dst"], set()).add(edge["src"])
+    return callers
+
+
+def pull_linked_cards(columns: list[list[list[str]]], nodes: dict[str, dict], links: dict[str, list[str]]) -> None:
+    """Rubber bands: each edge pulls the tops of its two cards toward the same height. Sweeps alternate left to
+    right and right to left; each block re-sorts its cards by wanted y, blocks keep their stack order, then the column
+    keeps the row gap."""
     for sweep in range(RELAX_SWEEPS):
         for blocks in columns if sweep % 2 == 0 else reversed(columns):
             ids = [i for block in blocks for i in block]
-            wanted = {i: sum(map(center, links[i])) / len(links[i]) - get_card_height(nodes[i]) / 2 if i in links
-                      else nodes[i]["y"] for i in ids}
+            wanted = {i: sum(nodes[j]["y"] for j in links[i]) / len(links[i]) if i in links else nodes[i]["y"]
+                      for i in ids}
             for block in blocks:
-                block.sort(key=lambda i: wanted[i] + get_card_height(nodes[i]) / 2)
-            ids = [i for block in blocks for i in block]
-            for i, y in zip(ids, pack_column([get_card_height(nodes[i]) for i in ids], [wanted[i] for i in ids])):
-                nodes[i]["y"] = y
+                block.sort(key=lambda i: wanted[i])
+            set_column_ys(blocks, nodes, wanted)
+
+
+def set_column_ys(blocks: list[list[str]], nodes: dict[str, dict], wanted: dict[str, float]) -> None:
+    ids = [i for block in blocks for i in block]
+    for i, y in zip(ids, pack_column([get_card_height(nodes[i]) for i in ids], [wanted[i] for i in ids])):
+        nodes[i]["y"] = y
+
+
+def improve_columns(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> None:
+    """Each column becomes a tight stack; then passes over the columns until none changes, each column taking its
+    best order (`improve_column`)."""
+    weights = get_link_weights(edges, get_edge_usage(nodes, edges))
+    callers = get_callers(edges)
+    scorers = [ColumnScorer(blocks, nodes, weights, callers) for blocks in columns]
+    for blocks, scorer in zip(columns, scorers):
+        scorer.set_ys(blocks)
+    for _ in range(POLISH_PASSES):
+        if not any([improve_column(blocks, scorer) for blocks, scorer in zip(columns, scorers)]):
+            return
+
+
+def get_link_weights(edges: list[dict], usage: list[int]) -> dict[str, dict[str, int]]:
+    """Per card, per linked card: the paths that cross the edges between them, plus 1 per edge so an unused edge
+    still pulls."""
+    weights: dict[str, dict[str, int]] = {}
+    for edge, paths in zip(edges, usage):
+        if edge["src"] != edge["dst"]:
+            for a, b in ((edge["src"], edge["dst"]), (edge["dst"], edge["src"])):
+                weights.setdefault(a, {})[b] = weights.get(a, {}).get(b, 0) + paths + 1
+    return weights
+
+
+def improve_column(blocks: list[list[str]], scorer: "ColumnScorer") -> bool:
+    """Greedy: move a run of neighbor cards to another place in their block when that lowers the column score most;
+    repeat until no move helps. True when the column changed."""
+    scorer.scores.clear()  # rule: scores hold the other columns' y values of this turn only
+    start = best = [list(block) for block in blocks]
+    while (found := find_better_order(best, scorer)) is not None:
+        best = found
+    blocks[:] = best
+    scorer.set_ys(blocks)
+    return best is not start
+
+
+def find_better_order(current: list[list[str]], scorer: "ColumnScorer") -> list[list[str]] | None:
+    found = min(get_run_moves(current), key=scorer.get_score, default=None)
+    return found if found and scorer.get_score(found) < scorer.get_score(current) - 0.5 else None
+
+
+class ColumnScorer:
+    """Scores card orders of one tight column against the cards of other columns, which stay put. Every term counts
+    once per path that crosses it, so often used edges weigh most."""
+
+    def __init__(self, blocks: list[list[str]], nodes: dict[str, dict], weights: dict[str, dict[str, int]],
+                 callers: dict[str, set[str]]):
+        self.nodes, self.callers = nodes, callers
+        ids = [i for block in blocks for i in block]
+        self.outside = {i: [(j, w) for j, w in weights.get(i, {}).items() if j not in ids] for i in ids}
+        self.use = {i: get_use(weights.get(i, {}), callers.get(i, set())) for i in ids}
+        self.ranked = self.get_ranked_pairs(ids)
+        self.scores: dict[tuple[str, ...], float] = {}
+
+    def get_ranked_pairs(self, ids: list[str]) -> list[tuple[str, str, int]]:
+        """Each two cards with a shared caller, more used first, with their use difference."""
+        return [(a, b, self.use[a] - self.use[b]) for a in ids for b in ids
+                if self.use[a] > self.use[b] and self.share_caller(a, b)]
+
+    def set_ys(self, blocks: list[list[str]]) -> None:
+        for node_id, y in self.get_ys(blocks).items():
+            self.nodes[node_id]["y"] = y
+
+    def get_ys(self, blocks: list[list[str]]) -> dict[str, float]:
+        """Cards ROW_GAP apart; the column top makes the weighted median edge to another column level, which gives
+        the least weighted edge height."""
+        ids, offset, offsets = [i for block in blocks for i in block], 0, {}
+        for node_id in ids:
+            offsets[node_id] = offset
+            offset += get_card_height(self.nodes[node_id]) + ROW_GAP
+        top = get_weighted_median(self.get_top_wishes(offsets))
+        return {i: top + offsets[i] for i in ids}
+
+    def get_top_wishes(self, offsets: dict[str, int]) -> list[tuple[float, int]]:
+        return [(self.nodes[j]["y"] - offsets[i], w) for i in offsets for j, w in self.outside[i]]
+
+    def get_score(self, blocks: list[list[str]]) -> float:
+        order = tuple(i for block in blocks for i in block)
+        if order not in self.scores:
+            self.scores[order] = self.score_order(blocks)
+        return self.scores[order]
+
+    def score_order(self, blocks: list[list[str]]) -> float:
+        """Per edge to another column, its height less LEVEL_GAIN when level; less the sibling gain of each two
+        neighbor cards with a shared caller; plus ORDER_COST per path of difference where a less used card sits above
+        a more used one with the same caller. Edge terms count per crossing path."""
+        ys = self.get_ys(blocks)
+        edges = sum(w * (abs(y - self.nodes[j]["y"]) or -LEVEL_GAIN) for i, y in ys.items() for j, w in self.outside[i])
+        ids = list(ys)
+        siblings = sum(self.get_sibling_gain(a, b) for a, b in zip(ids, ids[1:]) if self.share_caller(a, b))
+        flipped = sum(diff for a, b, diff in self.ranked if ys[a] > ys[b])
+        return edges - siblings + ORDER_COST * flipped
+
+    def get_sibling_gain(self, a: str, b: str) -> float:
+        """SIBLING_GAIN per path into the less used card, at least SIBLING_FLOOR."""
+        return max(SIBLING_GAIN * min(self.use[a], self.use[b]), SIBLING_FLOOR)
+
+    def share_caller(self, a: str, b: str) -> bool:
+        return bool(self.callers.get(a, set()) & self.callers.get(b, set()))
+
+
+def get_use(weights: dict[str, int], callers: set[str]) -> int:
+    """Weights of the edges into a card from its callers."""
+    return sum(weights.get(c, 0) for c in callers)
+
+
+def get_weighted_median(wishes: list[tuple[float, int]]) -> float:
+    """First value at which the weights reach half the total; 0 for no wishes."""
+    half, total = sum(w for _, w in wishes) / 2, 0
+    for value, weight in sorted(wishes):
+        total += weight
+        if total >= half:
+            return value
+    return 0
+
+
+def get_run_moves(blocks: list[list[str]]):
+    for b, block in enumerate(blocks):
+        for start, end in ((s, e) for s in range(len(block)) for e in range(s + 1, len(block) + 1)):
+            run, rest = block[start:end], block[:start] + block[end:]
+            for place in (p for p in range(len(rest) + 1) if p != start):
+                yield blocks[:b] + [rest[:place] + run + rest[place:]] + blocks[b + 1:]
+
+
+def set_top_to_zero(nodes: dict[str, dict]) -> None:
     top = min((n["y"] for n in nodes.values()), default=0)
     for n in nodes.values():
         n["y"] = round(n["y"] - top)

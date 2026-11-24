@@ -10,6 +10,7 @@ import cost  # noqa: E402
 import layout  # noqa: E402
 import skillmap  # noqa: E402
 import units  # noqa: E402
+import usage  # noqa: E402
 
 
 def write(path: Path, text: str) -> Path:
@@ -534,9 +535,39 @@ def test_layout_lets_rubber_bands_reorder_a_column():
     for x, blocks in enumerate(columns):
         layout.set_column_positions(x, [cards[i] for i in blocks[0]])
     edges = [{"src": "a", "dst": "d"}, {"src": "b", "dst": "c"}]
-    layout.pull_linked_cards(columns, cards, edges)
+    layout.pull_linked_cards(columns, cards, layout.get_links(edges))
     y = {i: c["y"] for i, c in cards.items()}
     assert (y["a"] < y["b"]) == (y["d"] < y["c"]) and (y["d"], y["c"]) == (y["a"], y["b"])
+
+
+def test_layout_polish_puts_cards_with_a_shared_caller_next_to_each_other():
+    # SKILLMAP-10.8
+    cards = {i: {"id": i, "kind": "agent", "mds": []} for i in ("p", "q", "a1", "b1", "a2", "b2")}
+    columns = [[["p", "q"]], [["a1", "b1", "a2", "b2"]]]
+    for x, blocks in enumerate(columns):
+        layout.set_column_positions(x, [cards[i] for i in blocks[0]])
+    edges = [{"src": s, "dst": d} for s, d in (("p", "a1"), ("p", "a2"), ("q", "b1"), ("q", "b2"))]
+    layout.improve_columns(columns, cards, edges)
+    order = "".join(i[0] for i in columns[1][0])
+    ys = sorted(cards[i]["y"] for i in columns[1][0])
+    assert order in ("aabb", "bbaa")
+    assert [b - a for a, b in zip(ys, ys[1:])] == [layout.get_card_height(cards["a1"]) + layout.ROW_GAP] * 3
+
+
+def test_layout_polish_puts_the_most_used_card_level_with_its_caller():
+    # SKILLMAP-10.9
+    cards = {"c": {"id": "c", "kind": "command", "mds": [], "args": []},
+             "s": {"id": "s", "kind": "shared", "mds": [], "args": [{"id": "max"}]}}
+    cards |= {i: {"id": i, "kind": "agent", "mds": []} for i in ("w", "f")}
+    columns = [[["c"]], [["s"]], [["w", "f"]]]
+    for x, blocks in enumerate(columns):
+        layout.set_column_positions(x, [cards[i] for i in blocks[0]])
+    edges = [{"src": "c", "dst": "s", "kind": "call", "callArgs": "opus"},
+             {"src": "s", "dst": "w", "kind": "spawn", "args": ["max"]},
+             {"src": "s", "dst": "f", "kind": "spawn"}]
+    assert usage.get_edge_usage(cards, edges) == [1, 0, 1]
+    layout.improve_columns(columns, cards, edges)
+    assert columns[2] == [["f", "w"]] and cards["f"]["y"] == cards["s"]["y"]
 
 
 def test_agent_runs_come_from_count_and_many_runs_get_batch_hint(tmp_path, capsys):

@@ -485,7 +485,7 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 1. Columns: one per layer; inside a column ids in ascending order. Column 0 keeps that order. Each later column is
    sorted, stable, by the mean row of the sources of edges into each node that sit in earlier columns; a node without
    such source goes last.
-1. Stack: each column becomes one block. Limit is the height of the tallest column: its cards' heights plus 28
+1. Stack: each column becomes one block. Limit is the height of the tallest column: its cards' heights plus 8
    between cards. Flow cost: each edge between two nodes costs its column span (target column minus source column,
    as an absolute number), plus 100 when the span is 0 or less. Repeat: over every pair of a column that is not the
    first and another column, try moving all blocks of the first under the blocks of the second, when the joined
@@ -500,21 +500,41 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    sit in, try moving it into the block of that column that holds a node it shares an edge with, else the last block,
    when that column stays within the limit; empty blocks and columns close up. Keep the try with the lowest score
    when it is lower than the current score, the first such try on a tie; stop when no try lowers the score.
-1. Positions: x is column times 380. y starts at 0 per column; each card, block after block, adds its height plus 28.
+1. Positions: x is column times 380. y starts at 0 per column; each card, block after block, adds its height plus 8.
    Height is 64 plus
    18 per OwnMd line, plus 18 when the node has args, plus 18 for an agent.
 1. Pull: then 40 sweeps over the columns, left to right on even sweeps and right to left on odd ones. In each column
-   every card linked by an edge (either way, self edges left out) wants its center at the mean center of its linked
-   cards; a card with no link wants its current y. Each block re-sorts its cards, stable, by wanted center; blocks
-   keep their stack order. The column then takes the y values closest to those wishes in least squares that keep that
-   order and at least 28 between cards. Last, all y values shift so the top card sits at 0, rounded to whole pixels.
+   every card linked by an edge (either way, self edges left out) wants its y at the mean y of its linked cards; a
+   card with no link wants its current y. Each block re-sorts its cards, stable, by wanted y; blocks keep their stack
+   order. The column then takes the y values closest to those wishes in least squares that keep that order and at
+   least 8 between cards.
+1. Polish: first each column becomes a tight stack (see Tight stack). Then passes over the columns, left to right,
+   until a pass changes no column, 4 passes at most. In its turn a column takes the card order with the lowest score,
+   found as follows. Repeat: try every move of a run of next cards in one block to another place in that block; keep
+   the try with the lowest score when it is at least 0.5 lower than the current score, the first such try on a tie;
+   stop when no try lowers it. The column then takes the tight stack of that order.
+   - Usage: paths start at each entry card (a command, or a card no edge points at), once bare and once with each
+     of the card's own args alone, and follow edges that are not loop backs or self edges. An edge with args is
+     followed only when the path runs with one of them. A spawn passes on the path's args; a call or load passes the
+     callee args its `callArgs` tokens name, with the page trace's token rules (R13). An edge's usage is the number
+     of paths that end with it.
+   - Weight of two linked cards: per edge between them, its usage plus 1. Use of a card: the weights to the cards
+     that have an edge into it.
+   - Tight stack: cards in order, 8 between cards. The top is the weighted median wish: per edge to a card in another
+     column, the wish is that card's y less the card's offset in the stack, with its weight; the median is the
+     lowest wish at which the summed weights reach half the total, 0 without wishes.
+   - Score: per edge to a card in another column, its weight times the absolute y difference of its two cards, or
+     times -50 when that difference is 0 (a level edge); less, per two cards next to each other (in stack order) that
+     share a source of an edge into both, 200 times the lower use of the two, at least 5000; plus 10 times the use difference of each two
+     cards that share such a source where the less used card sits above.
+1. Last, all y values shift so the top card sits at 0, rounded to whole pixels.
 
 - **SKILLMAP-10.1:** Given `fix` calls `plan` and `plan` calls `fix`, when `render` runs, then edge fix to plan has
   `back` false, edge plan to fix has `back` true, and the `skill:plan` x is greater than the `skill:fix` x.
 - **SKILLMAP-10.2:** Given `fix` spawns an agent, loads a shared md and calls `builtin:code-review`, and `plan` is a
   command, when `render` runs, then x grows from command cards to the agent, shared skill, md and builtin cards.
 - **SKILLMAP-10.3:** Given cards `a`, `b`, `c` in one column and an edge from `c` to `d`, when the layout runs,
-  then `d` sits right of `c` at the same y, `a`, `b` and `c` stay 92 apart, and the top card sits at y 0.
+  then `d` sits right of `c` at the same y, `a`, `b` and `c` stay 72 apart, and the top card sits at y 0.
 - **SKILLMAP-10.4:** Given column `a`, `b`, column `c`, `d` and edges `a` to `d` and `b` to `c`, when the pull runs,
   then the two edges no longer cross: `d` sits level with `a` and `c` level with `b`.
 - **SKILLMAP-10.5:** Given one card of each kind command, agent, hook, mod, plugin, shared, builtin, tool and two mcp
@@ -527,6 +547,12 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.7:** Given columns `c` | `r` | `s` | `a1`, `a2`, `a3` (commands, shared, agents) and edges `c` to
   `a1` and `a1` to `s`, when the place step runs, then `a1` moves under `r`, left of `s`, and `a2`, `a3` stay in
   their column.
+- **SKILLMAP-10.8:** Given one column `p` that calls agents `a1` and `a2`, `q` that calls agents `b1` and `b2`, a next
+  column in the order `a1`, `b1`, `a2`, `b2`, when the polish runs, then each pair sits next to each other: no `b`
+  card sits between `a1` and `a2`; and the next column is a tight stack, 90 between card tops.
+- **SKILLMAP-10.9:** Given command `c` calls shared `s` with `callArgs` `opus`, `s` has arg `max`, spawns `w` only
+  under `max` and spawns `f` always, and the agent column holds `w` above `f`, when the polish runs, then the edge
+  usage is 1 for `c` to `s`, 0 for `s` to `w` and 1 for `s` to `f`, and `f` sits above `w`, level with `s`.
 
 ### R11 Page writing
 
@@ -548,8 +574,8 @@ order, then problems from the graph.
 - Meta line: summary and `~<tok> tok md` (when tok is not 0) joined by ` · `.
 - OwnMd lines: `<name> ~<tok>` and the `when` text right-aligned; tooltip the `when`.
 - Arg buttons: `[<label or id>]`, tooltip the note.
-- Before edges are drawn, cards in one column (same x) are sorted by y and stacked from the top, 8 px apart: each card
-  starts 8 px below the bottom of the card above it, the first at y 0.
+- Before edges are drawn, cards in one column (same x) are sorted by y and stacked from the top card's node y, 8 px
+  apart: each next card starts 8 px below the bottom of the card above it.
 - Every edge leaves the right side of the source card and enters the left side of the target, both 18 px below the
   card top. Target right of the source: curve between those points. Target in the same column or a column further left:
   dashed loop that bends out right of the source, runs left 40 px below the lower card, and bends into the left side of
