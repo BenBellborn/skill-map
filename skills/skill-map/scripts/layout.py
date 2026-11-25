@@ -1,8 +1,10 @@
 """Places map cards in columns: one band of columns per kind, callers left of callees inside a band; then whole
 columns stack under others while that makes edges flow left to right with shorter spans; last, single cards leave
 their band's column when that saves more flow cost than the cohesion they lose. Rubber bands then sort each column,
-and each column becomes a packed stack (cards in order, gaps allowed, each near its wanted y) in the order that
-scores best, with sweeps both ways."""
+and each column becomes a packed stack (cards in order, gaps allowed, colliding cards led by the highest-ranked
+card's wanted y) in the order that scores best, with sweeps both ways; the polish ends with one pass of fresh
+wishes, left to right (callers mostly sit left). Before the pull, an edge that skips columns gets a lane card per
+passed column (shared per source), so pull and polish keep a free row for its line; lanes end up in edge `lanes`."""
 from usage import get_edge_usage
 
 COLUMN_WIDTH = 380
@@ -28,6 +30,11 @@ LEVEL_GAIN = 50  # gain per level edge between two columns
 ORDER_COST = 10  # cost per path of difference when a less used card sits above a more used one with the same caller
 CROSSING_COST = 100  # cost per crossing of two edges to one neighbor column, per path of both edges
 POLISH_PASSES = 20  # most sweeps; the polish stops at the first sweep that changes no column
+# rule: above any card's use, so a card level with its single caller outranks every median card in a packed block.
+LEVEL_RANK = 1_000_000
+# rule: page line runs 18 px below lane top, like card edges: lane level with card at same y stays straight.
+LANE_HEIGHT = 18  # row gap above, line at the lane bottom, row gap below
+LANE_KIND = "lane"  # layout-only card: one slot of a source's edges in a column they pass; never in data["nodes"]
 
 
 def apply_layout(data: dict) -> None:
@@ -39,10 +46,20 @@ def apply_layout(data: dict) -> None:
     columns = place_cards(columns, nodes, data["edges"])
     for column, blocks in enumerate(columns):
         set_column_positions(column, [nodes[i] for block in blocks for i in block])
-    links = get_links(data["edges"])
-    pull_linked_cards(columns, nodes, links)
-    improve_columns(columns, nodes, data["edges"])
+    set_rows(columns, nodes, data["edges"])
+
+
+def set_rows(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> None:
+    """Y of each card and lane: lanes join the columns, then pull and polish run over edges split at their lanes."""
+    # rule: usage before lanes: a lane card has callers, never is an entry, and runs no args.
+    usage = get_edge_usage(nodes, edges)
+    passed = get_passed_columns(columns, edges)
+    add_lanes(columns, nodes, edges, passed)
+    links, link_usage = split_edges(edges, usage, passed)
+    pull_linked_cards(columns, nodes, get_links(links))
+    improve_columns(columns, nodes, links, link_usage)
     set_top_to_zero(nodes)
+    set_edge_lanes(edges, nodes, passed)
 
 
 def get_root_ids(nodes: dict[str, dict]) -> list[str]:
@@ -229,6 +246,58 @@ def set_column_positions(column: int, cards: list[dict]) -> None:
         y += get_card_height(card) + ROW_GAP
 
 
+def get_passed_columns(columns: list[list[list[str]]], edges: list[dict]) -> list[list[int]]:
+    """Per edge, the columns it passes on its way right, left to right; none for a loop back."""
+    column = {i: c for c, blocks in enumerate(columns) for block in blocks for i in block}
+    return [[] if edge["back"] else list(range(column[edge["src"]] + 1, column[edge["dst"]])) for edge in edges]
+
+
+def get_lane_id(src: str, column: int) -> str:
+    return f"{LANE_KIND}:{column}:{src}"
+
+
+def add_lanes(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict],
+              passed: list[list[int]]) -> None:
+    """A lane card per source and passed column, shared by the source's edges, at the mean of the source y and the
+    mean y of those edges' targets."""
+    targets: dict[tuple[str, int], list[str]] = {}
+    for edge, columns_passed in zip(edges, passed):
+        for c in columns_passed:
+            targets.setdefault((edge["src"], c), []).append(edge["dst"])
+    for (src, c), dsts in targets.items():
+        add_lane(columns[c], nodes, get_lane_id(src, c), (nodes[src]["y"] + get_mean_y(nodes, dsts)) / 2)
+
+
+def split_edges(edges: list[dict], usage: list[int], passed: list[list[int]]) -> tuple[list[dict], list[int]]:
+    """Each edge as links from its source through its lanes to its target, each link with the edge's usage."""
+    links: list[dict] = []
+    link_usage: list[int] = []
+    for edge, paths, columns_passed in zip(edges, usage, passed):
+        points = [edge["src"], *(get_lane_id(edge["src"], c) for c in columns_passed), edge["dst"]]
+        links += [{"src": a, "dst": b} for a, b in zip(points, points[1:])]
+        link_usage += [paths] * (len(points) - 1)
+    return links, link_usage
+
+
+def get_mean_y(nodes: dict[str, dict], ids: list[str]) -> float:
+    return sum(nodes[i]["y"] for i in ids) / len(ids)
+
+
+def add_lane(blocks: list[list[str]], nodes: dict[str, dict], lane_id: str, y: float) -> None:
+    """The lane joins the block whose cards sit nearest its y, the first on a tie; the pull then sorts it in."""
+    distance = {k: get_block_distance([nodes[i] for i in block], y) for k, block in enumerate(blocks)}
+    x = nodes[blocks[0][0]]["x"]
+    nodes[lane_id] = {"id": lane_id, "kind": LANE_KIND, "mds": [], "x": x, "y": y}
+    blocks[min(distance, key=distance.get)].append(lane_id)
+
+
+def get_block_distance(cards: list[dict], y: float) -> float:
+    """0 when y lies between the block's highest top and lowest bottom, else the distance to the nearer."""
+    top = min(card["y"] for card in cards)
+    bottom = max(card["y"] + get_card_height(card) for card in cards)
+    return max(top - y, y - bottom, 0)
+
+
 def get_links(edges: list[dict]) -> dict[str, list[str]]:
     """Linked cards per card, both edge ways, self edges left out."""
     links: dict[str, list[str]] = {}
@@ -263,21 +332,31 @@ def pull_linked_cards(columns: list[list[list[str]]], nodes: dict[str, dict], li
 
 def set_column_ys(blocks: list[list[str]], nodes: dict[str, dict], wanted: dict[str, float]) -> None:
     ids = [i for block in blocks for i in block]
-    for i, y in zip(ids, get_packed_ys([get_card_height(nodes[i]) for i in ids], [wanted[i] for i in ids])):
+    heights = [get_card_height(nodes[i]) for i in ids]
+    for i, y in zip(ids, get_packed_ys(heights, [wanted[i] for i in ids], [0] * len(ids))):
         nodes[i]["y"] = y
 
 
-def improve_columns(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> None:
+def improve_columns(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict],
+                    usage: list[int]) -> None:
     """Each column becomes a packed stack; then sweeps alternate left to right and right to left until a sweep
     changes no column or the column orders repeat those after an earlier sweep the same way, each column taking its
-    best order (`improve_column`)."""
-    weights = get_link_weights(edges, get_edge_usage(nodes, edges))
+    best order (`improve_column`); last, each column packs once more on fresh wishes. `usage`: paths per edge."""
+    weights = get_link_weights(edges, usage)
     callers = get_callers(edges)
     scorers = [ColumnScorer(blocks, nodes, weights, callers) for blocks in columns]
+    refresh_ys(columns, scorers)
+    sweep_columns(columns, scorers)
+    refresh_ys(columns, scorers)
+
+
+def refresh_ys(columns: list[list[list[str]]], scorers: list["ColumnScorer"]) -> None:
+    """Left to right, each column packs its order on the wishes of the other columns' current ys."""
+    # rule: left to right: a single caller left of its card packs first. One right of it (mod calls command) can
+    # still move after; accepted, one pass only.
     for blocks, scorer in zip(columns, scorers):
         scorer.start_turn()
         scorer.set_ys(blocks)
-    sweep_columns(columns, scorers)
 
 
 def sweep_columns(columns: list[list[list[str]]], scorers: list["ColumnScorer"]) -> None:
@@ -374,24 +453,30 @@ class ColumnScorer:
             self.nodes[node_id]["y"] = y
 
     def get_ys(self, blocks: list[list[str]]) -> dict[str, float]:
-        """Cards in order, at least ROW_GAP apart, each as near its wanted y as the column allows (`get_packed_ys`)."""
+        """Cards in order, at least ROW_GAP apart; where cards collide, the highest-ranked sits on its wanted y
+        (`get_ranks`, `get_packed_ys`)."""
         ids = [i for block in blocks for i in block]
         heights = [self.heights[i] for i in ids]
-        return dict(zip(ids, get_packed_ys(heights, fill_targets(self.get_targets(ids), heights))))
+        targets = self.get_targets(ids)
+        return dict(zip(ids, get_packed_ys(heights, fill_targets(targets, heights), self.get_ranks(ids, targets))))
+
+    def get_ranks(self, ids: list[str], targets: list[float | None]) -> list[int]:
+        """Rank per card in a packed block: -1 with no target; a card level with its single caller above every
+        median card, then by use; a median card by use."""
+        return [-1 if target is None else self.use[i] + (LEVEL_RANK if self.single_caller[i] else 0)
+                for i, target in zip(ids, targets)]
 
     def get_targets(self, ids: list[str]) -> list[float | None]:
         """Wanted y per card: a card whose only caller sits in another column wants that caller's y, but only the
-        first such card of that caller in column order; a later such card of that caller wants none and packs tight
-        under the card above; any other card with an edge to another column wants the weighted median y of those
-        edges' cards; the rest want none."""
-        targets: list[float | None] = []
-        leveled: set[str] = set()
-        for i in ids:
-            caller = self.single_caller[i]
-            targets.append(None if caller in leveled else self.wishes[i])
-            if caller:
-                leveled.add(caller)
-        return targets
+        first such card of that caller in column order, a real card before a lane; a later such card of that caller
+        wants none and packs tight under the card above; any other card with an edge to another column wants the
+        weighted median y of those edges' cards; the rest want none."""
+        level: dict[str, str] = {}
+        # rule: a lane never takes the level slot from a real card of its source, so a short edge stays straight.
+        for i in sorted(ids, key=lambda i: self.nodes[i]["kind"] == LANE_KIND):
+            if caller := self.single_caller[i]:
+                level.setdefault(caller, i)
+        return [self.wishes[i] if level.get(self.single_caller[i], i) == i else None for i in ids]
 
     def get_outside_single_caller(self, node_id: str, ids: list[str]) -> str | None:
         """The only caller of the card when it sits in another column, else None."""
@@ -467,6 +552,13 @@ def set_top_to_zero(nodes: dict[str, dict]) -> None:
         n["y"] = round(n["y"] - top)
 
 
+def set_edge_lanes(edges: list[dict], nodes: dict[str, dict], passed: list[list[int]]) -> None:
+    """Each edge that passes columns gets `lanes`: its lane y per passed column, left to right."""
+    for edge, columns_passed in zip(edges, passed):
+        if columns_passed:
+            edge["lanes"] = [nodes[get_lane_id(edge["src"], c)]["y"] for c in columns_passed]
+
+
 def fill_targets(targets: list[float | None], heights: list[int]) -> list[float]:
     """A card that wants no y wants tight under the card above; above the first wanted y, tight over the card
     below. A column where no card wants a y starts at 0."""
@@ -496,27 +588,48 @@ def is_clear(above_y: float, y: float, gap: float) -> bool:
     return above_y + gap <= y or above_y <= y - gap
 
 
-def get_packed_ys(heights: list[int], targets: list[float]) -> list[float]:
-    """Least-squares y per card, in order, no overlap: a card that would overlap the one above joins its block, and
-    a block sits at the mean of its cards' targets less their offsets in the block."""
-    # rule: polish packs per scored order, so merges move no card; offset in block = tight y less first card's.
+def get_packed_ys(heights: list[int], targets: list[float], ranks: list[int]) -> list[float]:
+    """Y per card, in order, no overlap: a card that would overlap the one above joins its block, and a block sits
+    at the mean of its highest-ranked cards' targets less their offsets in the block; equal ranks give least squares."""
+    # rule: polish packs per scored order, so merges move no card; offset in block = tight y less anchor card's.
+    # rule: anchor = a top-ranked card: a lone top card lands exactly on its target, a level edge stays level.
     tight = get_tight_ys(heights)
-    # per block, top block first: first card, sum of its cards' targets less their offsets, card count
-    blocks: list[tuple[int, float, int]] = []
-    for i, target in enumerate(targets):
-        first, total, count = i, target, 1
-        while blocks:
-            above, above_total, above_count = blocks[-1]
-            start = tight[first] - tight[above]
-            if is_clear(above_total / above_count, total / count, start):
-                break
-            blocks.pop()
-            first, total, count = above, above_total + total - start * count, above_count + count
-        blocks.append((first, total, count))
-    return [total / count + (tight[k] - tight[first])
-            for first, total, count in blocks for k in range(first, first + count)]
+    # rule: tuples, not objects: hot path, the polish packs every order it scores.
+    # per block, top block first: first card, card count, highest rank, targets of cards of that rank less their
+    # offsets from the anchor card, count of those cards, anchor card
+    blocks: list[tuple[int, int, int, float, int, int]] = []
+    for i, (target, rank) in enumerate(zip(targets, ranks)):
+        add_block(blocks, (i, 1, rank, target, 1, i), tight)
+    return [total / top + (tight[k] - tight[anchor])
+            for first, count, _, total, top, anchor in blocks for k in range(first, first + count)]
+
+
+def add_block(blocks: list[tuple[int, int, int, float, int, int]], block: tuple[int, int, int, float, int, int],
+              tight: list[int]) -> None:
+    """Adds the block under the others; it merges with each block above that it would overlap."""
+    while blocks:
+        above = blocks[-1]
+        start = tight[block[5]] - tight[above[5]]
+        if is_clear(above[3] / above[4], block[3] / block[4], start):
+            break
+        block = merge_blocks(blocks.pop(), block, start)
+    blocks.append(block)
+
+
+def merge_blocks(above: tuple[int, int, int, float, int, int], below: tuple[int, int, int, float, int, int],
+                 start: float) -> tuple[int, int, int, float, int, int]:
+    """One block of two packed blocks; the anchor of `below` sits `start` under the anchor of `above`."""
+    first, count, rank, total, top, anchor = above
+    _, below_count, below_rank, below_total, below_top, below_anchor = below
+    if below_rank > rank:
+        total, top, anchor = below_total, below_top, below_anchor
+    elif below_rank == rank:
+        total, top = total + below_total - start * below_top, top + below_top
+    return first, count + below_count, max(rank, below_rank), total, top, anchor
 
 
 def get_card_height(card: dict) -> int:
+    if card["kind"] == LANE_KIND:
+        return LANE_HEIGHT
     lines = len(card.get("mds", [])) + (1 if card.get("args") else 0) + (1 if card["kind"] == "agent" else 0)
     return CARD_BASE_HEIGHT + LINE_HEIGHT * lines

@@ -3,8 +3,12 @@ import json
 import os
 import random
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import cost  # noqa: E402
@@ -548,7 +552,7 @@ def test_layout_polish_puts_cards_with_a_shared_caller_next_to_each_other():
     for x, blocks in enumerate(columns):
         layout.set_column_positions(x, [cards[i] for i in blocks[0]])
     edges = [{"src": s, "dst": d} for s, d in (("p", "a1"), ("p", "a2"), ("q", "b1"), ("q", "b2"))]
-    layout.improve_columns(columns, cards, edges)
+    layout.improve_columns(columns, cards, edges, usage.get_edge_usage(cards, edges))
     order = "".join(i[0] for i in columns[1][0])
     ys = sorted(cards[i]["y"] for i in columns[1][0])
     assert order in ("aabb", "bbaa")
@@ -567,7 +571,7 @@ def test_layout_polish_puts_the_most_used_card_level_with_its_caller():
              {"src": "s", "dst": "w", "kind": "spawn", "args": ["max"]},
              {"src": "s", "dst": "f", "kind": "spawn"}]
     assert usage.get_edge_usage(cards, edges) == [1, 0, 1]
-    layout.improve_columns(columns, cards, edges)
+    layout.improve_columns(columns, cards, edges, usage.get_edge_usage(cards, edges))
     assert columns[2] == [["f", "w"]] and cards["f"]["y"] == cards["s"]["y"]
     assert cards["w"]["y"] == cards["f"]["y"] + layout.get_card_height(cards["f"]) + layout.ROW_GAP
 
@@ -599,7 +603,7 @@ def test_layout_polish_uncrosses_edges_between_neighbour_columns():
     for x, blocks in enumerate(columns):
         layout.set_column_positions(x, [cards[i] for i in blocks[0]])
     edges = [{"src": s, "dst": d} for s, d in (("p", "a"), ("q", "b"), ("r", "a"), ("r", "b"))]
-    layout.improve_columns(columns, cards, edges)
+    layout.improve_columns(columns, cards, edges, usage.get_edge_usage(cards, edges))
     assert count_crossings(cards, edges) == 0
 
 
@@ -619,13 +623,192 @@ def test_layout_polish_counts_only_crossings_into_a_neighbour_column_with_four_c
 def test_layout_packed_level_card_sits_exactly_on_its_caller_y():
     # SKILLMAP-10.9
     heights, wanted = [154, 82, 136], -28.01010816680211
-    ys = layout.get_packed_ys(heights, layout.fill_targets([wanted, None, None], heights))
+    ys = layout.get_packed_ys(heights, layout.fill_targets([wanted, None, None], heights), [0, -1, -1])
     assert ys[0] == wanted
     rng = random.Random(1)  # a wanted card with fillers above it is as exact
     for _ in range(2000):
         heights, wanted = [rng.randint(40, 200) for _ in range(3)], rng.uniform(-300, 300)
-        ys = layout.get_packed_ys(heights, layout.fill_targets([None, None, wanted], heights))
+        ys = layout.get_packed_ys(heights, layout.fill_targets([None, None, wanted], heights), [-1, -1, 0])
         assert ys[2] == wanted
+
+
+def test_layout_packed_block_sits_on_its_highest_ranked_card():
+    # SKILLMAP-10.12
+    assert layout.get_packed_ys([80, 80], [0, 10], [0, 1]) == [-78, 10]
+    assert layout.get_packed_ys([80, 80], [0, 10], [1, 0]) == [0, 88]
+    assert layout.get_packed_ys([80, 80], [0, 10], [1, 1]) == [-39, 49]
+    assert layout.get_packed_ys([80, 80, 80], [0, 100, 30], [0, 0, 5]) == [-146, -58, 30]
+    rng = random.Random(2)  # a pinned card below the block's first card lands exactly on a float target
+    for _ in range(2000):
+        n, wanted = rng.randint(2, 4), rng.uniform(-300, 300)
+        ys = layout.get_packed_ys([rng.randint(40, 200) for _ in range(n)], [wanted] * n, [0] * (n - 1) + [1])
+        assert ys[-1] == wanted
+
+
+def test_layout_ranks_a_single_caller_card_above_a_more_used_median_card_above_a_card_with_no_target():
+    # SKILLMAP-10.12
+    cards = {i: {"id": i, "kind": "skill", "mds": [], "x": 0, "y": 0} for i in ("p", "q", "r")}
+    cards |= {i: {"id": i, "kind": "skill", "mds": [], "x": layout.COLUMN_WIDTH, "y": 0} for i in ("a", "m", "f")}
+    weights = {"p": {"a": 2, "f": 20}, "a": {"p": 2}, "f": {"p": 20}, "q": {"m": 5}, "r": {"m": 5}, "m": {"q": 5, "r": 5}}
+    scorer = layout.ColumnScorer([["a", "m", "f"]], cards, weights, {"a": {"p"}, "f": {"p"}, "m": {"q", "r"}})
+    ids = ["a", "m", "f"]
+    ranks = scorer.get_ranks(ids, scorer.get_targets(ids))
+    assert ranks[0] > ranks[1] > ranks[2] == -1
+
+
+def test_layout_polish_ends_with_single_caller_cards_level_with_their_callers_final_y(monkeypatch):
+    # SKILLMAP-10.12
+    cards = {i: {"id": i, "kind": "skill", "mds": []} for i in "epa"}
+    columns = [[["e"]], [["p"]], [["a"]]]
+    for x, blocks in enumerate(columns):
+        layout.set_column_positions(x, [cards[i] for i in blocks[0]])
+
+    def move_callers(columns, scorers):
+        cards["e"]["y"] += 30.5
+        cards["p"]["y"] += 30.5
+
+    monkeypatch.setattr(layout, "sweep_columns", move_callers)
+    layout.improve_columns(columns, cards, [{"src": "e", "dst": "p"}, {"src": "p", "dst": "a"}], [0, 0])
+    assert cards["a"]["y"] == cards["p"]["y"] == cards["e"]["y"] == 30.5
+
+
+@pytest.mark.parametrize("use_a, use_b, level", [(1, 3, "b"), (3, 1, "a")])
+def test_layout_polish_leaves_the_more_used_of_two_colliding_single_caller_cards_level(use_a, use_b, level):
+    # SKILLMAP-10.12
+    cards = {"p": {"id": "p", "kind": "skill", "mds": [], "x": 0, "y": 0},
+             "q": {"id": "q", "kind": "skill", "mds": [], "x": 0, "y": 40}}
+    cards |= {i: {"id": i, "kind": "skill", "mds": [{}] * 4, "x": layout.COLUMN_WIDTH, "y": 0} for i in "ab"}
+    weights = {"p": {"a": use_a}, "a": {"p": use_a}, "q": {"b": use_b}, "b": {"q": use_b}}
+    blocks = [["a", "b"]]
+    layout.improve_column(blocks, layout.ColumnScorer(blocks, cards, weights, {"a": {"p"}, "b": {"q"}}))
+    caller = {"a": "p", "b": "q"}[level]
+    assert layout.get_card_height(cards["a"]) == 136 and blocks == [["a", "b"]]
+    assert cards[level]["y"] == cards[caller]["y"] and cards["b"]["y"] - cards["a"]["y"] == 136 + layout.ROW_GAP
+
+
+def test_layout_gives_an_edge_that_skips_columns_a_lane_in_each_passed_column_shared_per_source():
+    # SKILLMAP-10.13
+    cards = {i: {"id": i, "kind": "skill", "mds": [{}] * (len(i) - 1)} for i in ("s", "a", "aa", "b", "bbb", "c", "e")}
+    cards["s"]["kind"] = "command"
+    calls = [("s", "a"), ("s", "aa"), ("a", "b"), ("aa", "bbb"), ("b", "c"), ("b", "e"), ("s", "c"), ("s", "e")]
+    edges = [{"src": s, "dst": d, "kind": "call"} for s, d in calls] + [{"src": "c", "dst": "s", "kind": "call"}]
+    data = {"nodes": list(cards.values()), "edges": edges}
+    layout.apply_layout(data)
+    lanes = {(e["src"], e["dst"]): e.get("lanes") for e in edges}
+    assert [cards[i]["x"] // layout.COLUMN_WIDTH for i in ("s", "a", "b", "c", "e")] == [0, 1, 2, 3, 3]
+    assert len(lanes["s", "c"]) == 2 and lanes["s", "e"] == lanes["s", "c"]
+    assert lanes["s", "a"] is None and lanes["b", "c"] is None and lanes["c", "s"] is None  # one column apart, loop back
+    for k, top in enumerate(lanes["s", "c"]):
+        line = top + layout.LANE_HEIGHT  # the page line runs 18 px below the lane top, like an edge into a card
+        passed = [n for n in cards.values() if n["x"] == (k + 1) * layout.COLUMN_WIDTH]
+        assert len(passed) == 2 and all(
+            line <= n["y"] - layout.ROW_GAP or line >= n["y"] + layout.get_card_height(n) + layout.ROW_GAP for n in passed)
+    assert data["nodes"] == list(cards.values()) and len(cards) == 7
+    assert min([n["y"] for n in cards.values()] + lanes["s", "c"]) == 0
+
+
+def test_layout_lane_joins_the_nearest_block_of_its_column_and_the_first_on_a_tie():
+    # SKILLMAP-10.13
+    nodes = {i: {"id": i, "kind": "skill", "mds": [], "x": 0, "y": y} for i, y in (("a", 0), ("b", 200))}
+    for y, block in ((150, 1), (132, 0), (30, 0)):  # distances 50 and 86; 68 and 68; 0 inside the first block
+        blocks = [["a"], ["b"]]
+        layout.add_lane(blocks, nodes, "lane", y)
+        assert blocks[block][-1] == "lane" and nodes["lane"]["kind"] == layout.LANE_KIND
+
+
+def test_layout_keeps_a_direct_child_level_with_its_source_when_a_lane_of_that_source_shares_the_column():
+    # SKILLMAP-10.14
+    cards = {i: {"id": i, "kind": "skill", "mds": []} for i in ("s", "a", "x0")}
+    cards["s"]["kind"] = "command"
+    edges = [{"src": s, "dst": d, "kind": "call"} for s, d in (("s", "a"), ("a", "x0"), ("s", "x0"))]
+    layout.apply_layout({"nodes": list(cards.values()), "edges": edges})
+    assert edges[2]["lanes"] and cards["a"]["y"] == cards["s"]["y"]
+
+
+@pytest.mark.parametrize("ids, wanted", [(["lane", "a"], [None, 0]), (["a", "lane"], [0, None]), (["lane"], [0])])
+def test_layout_gives_the_level_target_to_a_real_card_before_a_lane_of_the_same_caller(ids, wanted):
+    # SKILLMAP-10.14
+    cards = {"s": {"id": "s", "kind": "command", "mds": [], "x": 0, "y": 0}, "a": {"id": "a", "kind": "skill", "mds": [],
+             "x": layout.COLUMN_WIDTH, "y": 30}, "lane": {"id": "lane", "kind": layout.LANE_KIND, "mds": [],
+                                                  "x": layout.COLUMN_WIDTH, "y": 0}}
+    scorer = layout.ColumnScorer([ids], cards, {i: {"s": 1} for i in ids}, {i: {"s"} for i in ids})
+    assert scorer.get_targets(ids) == wanted
+
+
+# Stub DOM for the page script: a card is 300 wide (`.card` CSS) and 40 high; offsetTop and offsetLeft follow style.
+PAGE_STUB = """
+const any = new Proxy(function () {}, { get: (t, k) => k === Symbol.toPrimitive ? () => 0 : any, apply: () => any });
+class El {
+  constructor(tag) { this.tag = tag; this.style = {}; this.attrs = {}; this.children = []; this.dataset = {}; }
+  get classList() { return any; }
+  get offsetTop() { return parseFloat(this.style.top) || 0; }
+  get offsetLeft() { return parseFloat(this.style.left) || 0; }
+  get offsetWidth() { return 300; }
+  get offsetHeight() { return 40; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  append(...kids) { this.children.push(...kids); }
+  replaceChildren() { this.children = []; }
+  querySelectorAll() { return []; }
+  addEventListener() {}
+  getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; }
+}
+const byId = new Map();
+globalThis.document = {
+  getElementById: id => id === "data" ? { textContent: DATA } : byId.get(id) || byId.set(id, new El(id)).get(id),
+  createElement: tag => new El(tag), createElementNS: (ns, tag) => new El(tag),
+  body: new El("body"), documentElement: new El("html"), querySelectorAll: () => [],
+};
+Object.assign(globalThis, { getComputedStyle: () => ({ getPropertyValue: () => "" }), addEventListener() {},
+  innerWidth: 1000, innerHeight: 800 });
+"""
+PAGE_DUMP = """
+const svg = byId.get("edges").children;
+console.log(JSON.stringify({ tops: byId.get("world").children.map(c => c.style.top),
+  paths: svg.filter(c => c.tag === "path").map(c => c.attrs.d),
+  labels: svg.filter(c => c.tag === "text").map(c => [c.attrs.x, c.attrs.y]) }));
+"""
+
+
+def run_page(nodes: list[dict], edges: list[dict]) -> dict:
+    """Runs the page script in node on a stub DOM; returns card tops, path `d` values and label x, y per edge."""
+    nodes = [{"label": n["id"], "kind": "skill", "mds": [], "args": [], "summary": "", "tok": 0, "hints": [], **n}
+             for n in nodes]
+    edges = [{"id": f"{e['src']}>{e['dst']}", "kind": "call", **e} for e in edges]
+    data = {"nodes": nodes, "edges": edges, "problems": [], "cost": {"agentBase": 1, "msPerTok": 1}}
+    script = skillmap.TEMPLATE.read_text(encoding="utf-8").split("<script>")[-1].split("</script>")[0]
+    source = f"const DATA = {json.dumps(json.dumps(data))};{PAGE_STUB}{script}{PAGE_DUMP}"
+    run = subprocess.run(["node", "-"], input=source, capture_output=True, text=True, encoding="utf-8", check=False)
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
+
+
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+
+
+@needs_node
+def test_page_lane_slot_is_shared_per_x_and_y_and_moves_below_a_card_with_every_edge_that_uses_it():
+    # SKILLMAP-12.3
+    w = layout.COLUMN_WIDTH
+    nodes = [{"id": "s", "x": 0, "y": 0}, {"id": "q", "x": 0, "y": 200}, {"id": "c", "x": w, "y": 0},
+             {"id": "t1", "x": 2 * w, "y": 0}, {"id": "t2", "x": 2 * w, "y": 100}]
+    edges = [{"src": "s", "dst": "t1", "lanes": [10]}, {"src": "s", "dst": "t2", "lanes": [10]},
+             {"src": "q", "dst": "t1", "lanes": [60]}]
+    page = run_page(nodes, edges)
+    lines = [re.search(r" L([\d.]+),([\d.]+)", d).groups() for d in page["paths"]]
+    # slot 10 moves 8 below card c (0 to 40), slot 60 moves 8 below that slot (48 to 66); each line runs 18 below its slot
+    assert lines == [(str(w + 300), "66"), (str(w + 300), "66"), (str(w + 300), "92")]
+    assert page["tops"] == ["0px", "200px", "0px", "0px", "100px"]
+
+
+@needs_node
+def test_page_lane_path_curves_into_each_lane_line_runs_across_the_column_and_curves_into_the_target():
+    # SKILLMAP-12.4
+    w = layout.COLUMN_WIDTH
+    nodes = [{"id": "s", "x": 0, "y": 0}, {"id": "t", "x": 3 * w, "y": 200}]
+    page = run_page(nodes, [{"src": "s", "dst": "t", "lanes": [100, 150]}])
+    assert page["paths"] == [f"M300,18 C340,18 340,118 {w},118 L{w + 300},118 C{w + 340},118 {w + 340},168 {2 * w},168"
+                             f" L{2 * w + 300},168 C{2 * w + 340},168 {2 * w + 340},218 {3 * w},218"]
+    assert page["labels"] == [[w + 150, 114]]  # middle lane: index (2 - 1) // 2 = 0, 4 above its line
 
 
 def test_layout_fill_targets_stacks_cards_without_a_target_up_from_the_first_wanted_card():

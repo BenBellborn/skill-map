@@ -270,6 +270,7 @@ problem: plan: unknown md reference/nope.md
 | loop | text | yes | empty | from the entry | 8 | `until queue empty` |
 | count | text | yes | empty | agent count for spawn, else empty | 9 | `5 max` |
 | back | boolean | yes | false | true for a back edge | 10 | `false` |
+| lanes | list of number | no | absent | lane y per column the edge passes, left to right (R10 Lanes) | 11 | `[120, 96]` |
 
 ### PageData
 
@@ -503,6 +504,14 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 1. Positions: x is column times 380. y starts at 0 per column; each card, block after block, adds its height plus 8.
    Height is 64 plus
    18 per OwnMd line, plus 18 when the node has args, plus 18 for an agent.
+1. Lanes: an edge that is not a back edge and whose target sits 2 or more columns right of its source passes each
+   column between them. Per source and passed column there is one lane: a layout-only card of height 18 that all edges
+   of that source passing that column share. Its y starts at the mean of the source y and the mean y of those edges'
+   targets; it joins the block of its column whose cards sit nearest that y (0 inside the span from the block's highest
+   top to its lowest bottom), the first on a tie. From here on each such edge counts as links from its source through
+   its lanes, left to right, to its target, each link with the edge's usage; usage itself is counted on the real edges
+   first. Pull, Polish and the shift to 0 treat a lane as a card. Its line runs 18 below its top, as an edge runs
+   into a card, so a lane level with a card stays straight; with 8 above and below, the line keeps 8 from every card.
 1. Pull: then 40 sweeps over the columns, left to right on even sweeps and right to left on odd ones. In each column
    every card linked by an edge (either way, self edges left out) wants its y at the mean y of its linked cards; a
    card with no link wants its current y. Each block re-sorts its cards, stable, by wanted y; blocks keep their stack
@@ -512,7 +521,9 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    even sweeps and right to left on odd ones, until a sweep changes no column or the column orders after a sweep repeat those after an earlier sweep the same way, 20 sweeps at most. In its turn a column takes the card order with the lowest score,
    found as follows. Repeat: try every move of a run of next cards in one block to another place in that block; keep
    the try with the lowest score when it is at least 0.5 lower than the current score, the first such try on a tie;
-   stop when no try lowers it. The column then takes the packed stack of that order.
+   stop when no try lowers it. The column then takes the packed stack of that order. Last, each column, left to right,
+   takes the packed stack of its order once more, with wishes from the other columns' current y values, so no card
+   keeps a wish from a y that a caller to its left has since left. A caller to its right can still move after it.
    - Usage: paths start at each entry card (a command, or a card no edge points at), once bare and once with each
      of the card's own args alone, and follow edges that are not loop backs or self edges. An edge with args is
      followed only when the path runs with one of them. A spawn passes on the path's args; a call or load passes the
@@ -522,12 +533,18 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      that have an edge into it.
    - Packed stack: cards in order, at least 8 between cards, gaps allowed. Each card wants a y. A card whose only
      caller (the source of an edge into it, self edges left out) sits in another column wants that caller's y, but
-     only the first such card of that caller in stack order; a later such card of that caller wants no y and packs
-     8 below the card above it. Any other card with an edge to a card in another column wants the weighted median
+     only the first such card of that caller in stack order, where a real card comes before a lane; a later such
+     card of that caller wants no y and packs 8 below the card above it. Any other card with an edge to a card in another column wants the weighted median
      of those cards' y values: per edge its weight; the median is the lowest value at which the summed weights reach half the total. A card that still wants no y wants 8 below the bottom of the card
      above; a card above the first card that wants a y wants 8 above the top of the card below; when no card wants a
-     y, the top card wants 0. The column then takes the y values closest to those wishes in least squares that keep
-     the order and at least 8 between cards.
+     y, the top card wants 0. Each card has a rank: a card that wants no y of its own ranks lowest; a card that wants
+     its single caller's y ranks above every card that wants a median, and among such cards and among median cards a
+     more used card ranks higher. Cards that would overlap form a block, top down: a card that would sit less than 8
+     below the card above joins that card's block. A block sits so its highest-ranked cards are at the mean of their
+     wishes less their offsets in the block; the other cards follow at 8 between cards. A block that then sits less
+     than 8 below the block above joins it too, and so on upward. A block with one highest-ranked card puts that card
+     exactly on its wish. When all cards of a block
+     share one rank, this is the least squares fit of their wishes.
    - Score: per edge to a card in another column, its weight times the absolute y difference of its two cards, or
      times -50 when that difference is 0 (a level edge); less, per two cards next to each other (in stack order) that
      share a source of an edge into both, 200 times the lower use of the two, at least 5000; plus 10 times the use difference of each two
@@ -537,7 +554,8 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      in this column and their other cards sit in opposite order; edges that share a card never cross. Self edges,
      edges inside one column and edges to a column further away are left out. The other cards' y values are those at
      the start of the column's turn.
-1. Last, all y values shift so the top card sits at 0, rounded to whole pixels.
+1. Last, all y values shift so the top card or lane sits at 0, rounded to whole pixels. Each edge that passes
+   columns gets `lanes`: the y of its lane in each passed column, left to right. Lanes never become nodes.
 
 - **SKILLMAP-10.1:** Given `fix` calls `plan` and `plan` calls `fix`, when `render` runs, then edge fix to plan has
   `back` false, edge plan to fix has `back` true, and the `skill:plan` x is greater than the `skill:fix` x.
@@ -573,6 +591,18 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
   `f1`, `f1` calls `f2`, `c` calls `s` and `s` calls `a`, all skills, when the layout runs, then `x` sits above `c`,
   `f1` above `s` and `f2` above `a`, and `s` sits level with `c` and `a` level with `s`: a column holds a gap so a
   card with a single caller sits level with it.
+- **SKILLMAP-10.12:** Given two cards of height 80 with wishes 0 and 10 and ranks 0 and 1, when they pack, then they
+  sit at -78 and 10; with equal ranks they sit at -39 and 49. Given callers `p` at y 0 and `q` at y 40 and their
+  single-caller cards `a` above `b` (height 136) in the next column, when the polish runs on that column, then the
+  more used of `a` and `b` sits level with its caller and the other sits 8 from it.
+- **SKILLMAP-10.13:** Given command `s` calls `a` and `aa`, `a` calls `b`, `aa` calls `bbb`, `b` calls `c` and `e`,
+  `s` calls `c` and `e`, and `c` calls `s`, when the layout runs, then `s`, `a`, `b`, `c` sit in columns 0 to 3; the
+  edges `s` to `c` and `s` to `e` get the same 2 lane y values, each line (18 below) at least 8 from every card of its
+  column; edges one column apart and the back edge `c` to `s` get no `lanes`; no lane is a node; the top card or lane
+  sits at 0. Given blocks with spans 0 to 64 and 200 to 264, a lane at 150 joins the second, at 132 (tie) and 30 the first.
+- **SKILLMAP-10.14:** Given command `s` calls `a` and `x0`, and `a` calls `x0`, when the layout runs, then the edge `s`
+  to `x0` gets a lane in the column of `a`, and `a` still sits level with `s`. Given a lane of `s` above or below a real
+  card `a` of `s` in one column, then `a` wants the y of `s` and the lane wants none; a lane alone wants the y of `s`.
 
 ### R11 Page writing
 
@@ -596,11 +626,16 @@ order, then problems from the graph.
 - Arg buttons: `[<label or id>]`, tooltip the note.
 - Before edges are drawn, cards in one column (same x) are sorted by y and keep their node y; a card that starts
   less than 8 px below the bottom of the card above it (its measured height may exceed the layout height) moves
-  down to start 8 px below that bottom.
+  down to start 8 px below that bottom. Lane slots join this stack as items of height 18: one slot per x and lane y,
+  where the x of an edge's k-th lane (from 0) is the source x plus (k + 1) times the source-to-target x span over the
+  lane count plus 1. A slot that moves down moves the lane y of every edge that uses it.
 - Every edge leaves the right side of the source card and enters the left side of the target, both 18 px below the
   card top. Target right of the source: curve between those points. Target in the same column or a column further left:
   dashed loop that bends out right of the source, runs left 40 px below the lower card, and bends into the left side of
   the target. Back edges are dashed. Edges have no arrow head: the left side of a card is in, the right side is out.
+- An edge with `lanes` runs through each lane: a curve across each column gap into the lane line at the passed column's
+  left side, a straight line 18 px below the lane y across that column (card width), and a last curve into the target. Its label
+  sits 4 px above the middle of its middle lane line (lane index rounded down from (count less 1) / 2).
 - Edge label: `spawn <count>` for spawn (or `spawn` when count is empty), else the kind, then `callArgs`, `when`,
   `loop`, non-empty parts joined by ` · `. Longer than 60 characters: first 57 plus `...`; full text as tooltip.
   Labels show only on traced edges.
@@ -617,6 +652,12 @@ order, then problems from the graph.
 - **SKILLMAP-12.2:** Given `plan` loads a missing `reference/nope.md`, `design-ext` has no fragment and `fix` changed
   since its fragment, when `render` runs, then the page problems hold only the `plan` problem, with the prompt that
   names `reference/nope.md`; the report still prints the `design-ext` and `fix` lines.
+- **SKILLMAP-12.3:** Given cards 40 high, card `c` at y 0 in the middle column, edges `s` to `t1` and `s` to `t2` with
+  lane y 10 there and edge `q` to `t1` with lane y 60, when the page loads, then the slot at 10 moves to 48 and both `s`
+  edges run their lane line at 66; the slot at 60 moves to 74 and its line runs at 92; every card keeps its y.
+- **SKILLMAP-12.4:** Given source `s` at x 0, y 0 and target `t` three columns right at y 200 with lane y 100 and 150,
+  when the page loads, then the edge curves from (300, 18) into each lane line 18 below the lane y at the column x, runs
+  300 across it, and curves into (`t` x, 218); its label sits at the middle of the first lane line, 4 above it.
 
 ### R13 Page trace and view
 

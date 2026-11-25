@@ -194,20 +194,40 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     return box;
   }
 
+  // rule: same as layout.py LANE_HEIGHT: line runs 18 px below lane y, like an edge into a card.
+  const LANE_HEIGHT = 18;
+  // Lane x of an edge's k-th passed column: columns sit evenly apart, so the passed ones split the span.
+  const laneX = (e, k) => { const a = nodes.get(e.src).x; return a + (k + 1) * (nodes.get(e.dst).x - a) / (e.lanes.length + 1); };
+
+  function getLaneSlots() {
+    // rule: one slot per x and y: the edges of one source share their lanes.
+    const slots = new Map();
+    for (const e of data.edges) {
+      (e.lanes || []).forEach((y, k) => {
+        const x = laneX(e, k), key = `${x},${y}`;
+        if (!slots.has(key)) slots.set(key, { x, y, height: LANE_HEIGHT, uses: [] });
+        slots.get(key).uses.push([e, k]);
+      });
+    }
+    return [...slots.values()].map(s => ({ ...s, place: y => s.uses.forEach(([e, k]) => { e.lanes[k] = y; }) }));
+  }
+
   function resolveOverlaps() {
     const columns = new Map();
+    const add = item => { if (!columns.has(item.x)) columns.set(item.x, []); columns.get(item.x).push(item); };
     for (const n of data.nodes) {
-      if (!columns.has(n.x)) columns.set(n.x, []);
-      columns.get(n.x).push(n);
+      const card = cards.get(n.id);
+      add({ x: n.x, y: n.y, height: card.offsetHeight, place: y => { n.y = y; card.style.top = y + "px"; } });
     }
+    getLaneSlots().forEach(add);
     for (const col of columns.values()) {
-      // rule: cards keep layout y and order; a card moves down only when within 8 px of the card above.
+      // rule: cards and lane slots keep layout y and order; one moves down only within 8 px of the one above.
       col.sort((a, b) => a.y - b.y);
       let bottom = col[0].y;
-      for (const n of col) {
-        n.y = Math.max(n.y, bottom);
-        cards.get(n.id).style.top = n.y + "px";
-        bottom = n.y + cards.get(n.id).offsetHeight + 8;
+      for (const item of col) {
+        item.y = Math.max(item.y, bottom);
+        item.place(item.y);
+        bottom = item.y + item.height + 8;
       }
     }
   }
@@ -215,6 +235,7 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
   function edgePath(e) {
     const a = cards.get(e.src), b = cards.get(e.dst);
     const ax = a.offsetLeft + a.offsetWidth, ay = a.offsetTop + 18, bx = b.offsetLeft, by = b.offsetTop + 18;
+    if (e.lanes) return lanePath(e, ax, ay, bx, by, a.offsetWidth);
     // rule: every edge leaves the source's right side and enters the target's left side.
     if (bx > ax) {
       const dx = Math.max(40, (bx - ax) / 2);
@@ -224,6 +245,19 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     const low = Math.max(a.offsetTop + a.offsetHeight, b.offsetTop + b.offsetHeight) + 40, r = 40;
     return { d: `M${ax},${ay} C${ax + r},${ay} ${ax + r},${low} ${ax},${low} L${bx},${low} ` +
       `C${bx - r},${low} ${bx - r},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: low - 8, left: true };
+  }
+
+  function lanePath(e, ax, ay, bx, by, width) {
+    // rule: bezier in each column gap, straight line at the lane y across each passed column.
+    const curve = (x0, y0, x1, y1) => { const dx = Math.max(40, (x1 - x0) / 2); return ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`; };
+    let d = `M${ax},${ay}`, x = ax, y = ay;
+    e.lanes.forEach((top, k) => {
+      const lx = laneX(e, k), ly = top + LANE_HEIGHT;
+      d += curve(x, y, lx, ly) + ` L${lx + width},${ly}`;
+      x = lx + width; y = ly;
+    });
+    const mid = Math.floor((e.lanes.length - 1) / 2);
+    return { d: d + curve(x, y, bx, by), lx: laneX(e, mid) + width / 2, ly: e.lanes[mid] + LANE_HEIGHT - 4 };
   }
 
   function drawEdges() {
