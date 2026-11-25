@@ -200,7 +200,7 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
   const laneX = (e, k) => { const a = nodes.get(e.src).x; return a + (k + 1) * (nodes.get(e.dst).x - a) / (e.lanes.length + 1); };
 
   function getLaneSlots() {
-    // rule: one slot per x and y: the edges of one source share their lanes.
+    // rule: one slot per x and y: edges that share a lane in layout.py (one source, or one target) share it.
     const slots = new Map();
     for (const e of data.edges) {
       (e.lanes || []).forEach((y, k) => {
@@ -232,14 +232,19 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
     }
   }
 
-  function edgePath(e) {
+  // rule: a card with 2+ out (in) edges gets a straight stub that its edges share, so they split late (join early).
+  const STUB = 20;
+  const curve = (x0, y0, x1, y1) => { const dx = Math.max(40, (x1 - x0) / 2); return ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`; };
+  const stub = (x0, x1, y) => x1 === x0 ? "" : ` L${x1},${y}`;
+
+  function edgePath(e, stubOut, stubIn) {
     const a = cards.get(e.src), b = cards.get(e.dst);
     const ax = a.offsetLeft + a.offsetWidth, ay = a.offsetTop + 18, bx = b.offsetLeft, by = b.offsetTop + 18;
-    if (e.lanes) return lanePath(e, ax, ay, bx, by, a.offsetWidth);
+    const sx = ax + stubOut, ex = bx - stubIn;
+    if (e.lanes) return lanePath(e, ax, ay, bx, by, a.offsetWidth, sx, ex);
     // rule: every edge leaves the source's right side and enters the target's left side.
     if (bx > ax) {
-      const dx = Math.max(40, (bx - ax) / 2);
-      return { d: `M${ax},${ay} C${ax + dx},${ay} ${bx - dx},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 - 4 };
+      return { d: `M${ax},${ay}${stub(ax, sx, ay)}${curve(sx, ay, ex, by)}${stub(ex, bx, by)}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 - 4 };
     }
     // rule: a target not right of the source (same column, band further left) is reached by a loop below both cards.
     const low = Math.max(a.offsetTop + a.offsetHeight, b.offsetTop + b.offsetHeight) + 40, r = 40;
@@ -247,23 +252,25 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
       `C${bx - r},${low} ${bx - r},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: low - 8, left: true };
   }
 
-  function lanePath(e, ax, ay, bx, by, width) {
+  function lanePath(e, ax, ay, bx, by, width, sx, ex) {
     // rule: bezier in each column gap, straight line at the lane y across each passed column.
-    const curve = (x0, y0, x1, y1) => { const dx = Math.max(40, (x1 - x0) / 2); return ` C${x0 + dx},${y0} ${x1 - dx},${y1} ${x1},${y1}`; };
-    let d = `M${ax},${ay}`, x = ax, y = ay;
+    let d = `M${ax},${ay}${stub(ax, sx, ay)}`, x = sx, y = ay;
     e.lanes.forEach((top, k) => {
       const lx = laneX(e, k), ly = top + LANE_HEIGHT;
       d += curve(x, y, lx, ly) + ` L${lx + width},${ly}`;
       x = lx + width; y = ly;
     });
     const mid = Math.floor((e.lanes.length - 1) / 2);
-    return { d: d + curve(x, y, bx, by), lx: laneX(e, mid) + width / 2, ly: e.lanes[mid] + LANE_HEIGHT - 4 };
+    return { d: d + curve(x, y, ex, by) + stub(ex, bx, by), lx: laneX(e, mid) + width / 2, ly: e.lanes[mid] + LANE_HEIGHT - 4 };
   }
 
   function drawEdges() {
     const ns = "http://www.w3.org/2000/svg";
+    const outs = new Map(), ins = new Map();
+    const count = (map, id) => map.set(id, (map.get(id) || 0) + 1);
+    for (const e of data.edges) if (e.src !== e.dst) { count(outs, e.src); count(ins, e.dst); }
     for (const e of data.edges) {
-      const p = edgePath(e);
+      const p = edgePath(e, outs.get(e.src) > 1 ? STUB : 0, ins.get(e.dst) > 1 ? STUB : 0);
       const path = document.createElementNS(ns, "path");
       path.setAttribute("d", p.d);
       // rule: a loop back and an edge into a band further left are both dashed.

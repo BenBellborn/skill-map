@@ -506,8 +506,10 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    18 per OwnMd line, plus 18 when the node has args, plus 18 for an agent.
 1. Lanes: an edge that is not a back edge and whose target sits 2 or more columns right of its source passes each
    column between them. Per source and passed column there is one lane: a layout-only card of height 18 that all edges
-   of that source passing that column share. Its y starts at the mean of the source y and the mean y of those edges'
-   targets; it joins the block of its column whose cards sit nearest that y (0 inside the span from the block's highest
+   of that source passing that column share. Source sharing wins: where an edge is alone in its source's lane, the edges
+   into its target that are each alone in their source's lane in that column share one lane instead, when there are 2
+   or more of them. A lane's y starts at the mean of the mean y of its edges' sources and the mean y of their targets;
+   it joins the block of its column whose cards sit nearest that y (0 inside the span from the block's highest
    top to its lowest bottom), the first on a tie. From here on each such edge counts as links from its source through
    its lanes, left to right, to its target, each link with the edge's usage; usage itself is counted on the real edges
    first. Pull, Polish and the shift to 0 treat a lane as a card. Its line runs 18 below its top, as an edge runs
@@ -603,6 +605,9 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.14:** Given command `s` calls `a` and `x0`, and `a` calls `x0`, when the layout runs, then the edge `s`
   to `x0` gets a lane in the column of `a`, and `a` still sits level with `s`. Given a lane of `s` above or below a real
   card `a` of `s` in one column, then `a` wants the y of `s` and the lane wants none; a lane alone wants the y of `s`.
+- **SKILLMAP-10.15:** Given commands `p` and `q`, `p` calls `m`, `m` calls `t` and `u`, and `p` and `q` call `t`, when
+  the layout runs, then the edges `p` to `t` and `q` to `t`, each alone in its source's lane in the column of `m`, get
+  the same lane y. When `p` also calls `u`, the edges `p` to `t` and `p` to `u` share a lane and `q` to `t` gets another.
 
 ### R11 Page writing
 
@@ -633,6 +638,9 @@ order, then problems from the graph.
   card top. Target right of the source: curve between those points. Target in the same column or a column further left:
   dashed loop that bends out right of the source, runs left 40 px below the lower card, and bends into the left side of
   the target. Back edges are dashed. Edges have no arrow head: the left side of a card is in, the right side is out.
+- Stubs: an edge out of a card with 2 or more out edges starts with a straight 20 px stub; an edge into a card with 2
+  or more in edges ends with one; self edges are not counted. The curves run between the stubs, so the edges of one
+  card leave (or enter) as one line. A loop has no stubs.
 - An edge with `lanes` runs through each lane: a curve across each column gap into the lane line at the passed column's
   left side, a straight line 18 px below the lane y across that column (card width), and a last curve into the target. Its label
   sits 4 px above the middle of its middle lane line (lane index rounded down from (count less 1) / 2).
@@ -658,6 +666,9 @@ order, then problems from the graph.
 - **SKILLMAP-12.4:** Given source `s` at x 0, y 0 and target `t` three columns right at y 200 with lane y 100 and 150,
   when the page loads, then the edge curves from (300, 18) into each lane line 18 below the lane y at the column x, runs
   300 across it, and curves into (`t` x, 218); its label sits at the middle of the first lane line, 4 above it.
+- **SKILLMAP-12.5:** Given `s` with edges to `t1`, `t2` and (through one lane) `t3`, and `q` with an edge to `t1`,
+  when the page loads, then every `s` edge starts with a line from (300, 18) to (320, 18), the edges into `t1` end with
+  a line from 20 px left of `t1` into it, and the edges into `t2` and `t3` and the edge out of `q` have no stub.
 
 ### R13 Page trace and view
 

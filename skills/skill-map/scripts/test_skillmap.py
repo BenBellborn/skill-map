@@ -735,6 +735,21 @@ def test_layout_gives_the_level_target_to_a_real_card_before_a_lane_of_the_same_
     assert scorer.get_targets(ids) == wanted
 
 
+@pytest.mark.parametrize("p_also_calls_u", [False, True])
+def test_layout_edges_into_one_target_share_a_lane_where_each_is_alone_in_its_source_lane(p_also_calls_u):
+    # SKILLMAP-10.15
+    cards = {i: {"id": i, "kind": "command" if i in "pq" else "skill", "mds": []} for i in ("p", "q", "m", "t", "u")}
+    calls = [("p", "m"), ("m", "t"), ("m", "u"), ("p", "t"), ("q", "t")] + [("p", "u")] * p_also_calls_u
+    edges = [{"src": s, "dst": d, "kind": "call"} for s, d in calls]
+    layout.apply_layout({"nodes": list(cards.values()), "edges": edges})
+    lanes = {(e["src"], e["dst"]): e.get("lanes") for e in edges}
+    assert [cards[i]["x"] // layout.COLUMN_WIDTH for i in ("p", "q", "m", "t", "u")] == [0, 0, 1, 2, 2]
+    if p_also_calls_u:  # source sharing wins: p's two edges keep one lane, q's edge has its own
+        assert lanes["p", "t"] == lanes["p", "u"] and lanes["q", "t"] != lanes["p", "t"]
+    else:
+        assert len(lanes["p", "t"]) == 1 and lanes["q", "t"] == lanes["p", "t"]
+
+
 # Stub DOM for the page script: a card is 300 wide (`.card` CSS) and 40 high; offsetTop and offsetLeft follow style.
 PAGE_STUB = """
 const any = new Proxy(function () {}, { get: (t, k) => k === Symbol.toPrimitive ? () => 0 : any, apply: () => any });
@@ -794,7 +809,7 @@ def test_page_lane_slot_is_shared_per_x_and_y_and_moves_below_a_card_with_every_
     edges = [{"src": "s", "dst": "t1", "lanes": [10]}, {"src": "s", "dst": "t2", "lanes": [10]},
              {"src": "q", "dst": "t1", "lanes": [60]}]
     page = run_page(nodes, edges)
-    lines = [re.search(r" L([\d.]+),([\d.]+)", d).groups() for d in page["paths"]]
+    lines = [re.search(r"C[^L]* L([\d.]+),([\d.]+)", d).groups() for d in page["paths"]]  # past any stub
     # slot 10 moves 8 below card c (0 to 40), slot 60 moves 8 below that slot (48 to 66); each line runs 18 below its slot
     assert lines == [(str(w + 300), "66"), (str(w + 300), "66"), (str(w + 300), "92")]
     assert page["tops"] == ["0px", "200px", "0px", "0px", "100px"]
@@ -809,6 +824,22 @@ def test_page_lane_path_curves_into_each_lane_line_runs_across_the_column_and_cu
     assert page["paths"] == [f"M300,18 C340,18 340,118 {w},118 L{w + 300},118 C{w + 340},118 {w + 340},168 {2 * w},168"
                              f" L{2 * w + 300},168 C{2 * w + 340},168 {2 * w + 340},218 {3 * w},218"]
     assert page["labels"] == [[w + 150, 114]]  # middle lane: index (2 - 1) // 2 = 0, 4 above its line
+
+
+@needs_node
+def test_page_edge_runs_a_20_px_stub_out_of_a_card_with_2_out_edges_and_into_a_card_with_2_in_edges():
+    # SKILLMAP-12.5
+    w = layout.COLUMN_WIDTH
+    nodes = [{"id": "s", "x": 0, "y": 0}, {"id": "q", "x": 0, "y": 100}, {"id": "t1", "x": w, "y": 0},
+             {"id": "t2", "x": w, "y": 100}, {"id": "t3", "x": 2 * w, "y": 0}]
+    edges = [{"src": "s", "dst": "t1"}, {"src": "s", "dst": "t2"}, {"src": "q", "dst": "t1"},
+             {"src": "s", "dst": "t3", "lanes": [50]}]
+    page = run_page(nodes, edges)
+    assert page["paths"] == [
+        f"M300,18 L320,18 C360,18 {w - 60},18 {w - 20},18 L{w},18",  # 3 out and 2 in: stub at both ends
+        f"M300,18 L320,18 C360,18 {w - 40},118 {w},118",  # 3 out, 1 in: stub at the start only
+        f"M300,118 C340,118 {w - 60},18 {w - 20},18 L{w},18",  # 1 out, 2 in: stub at the end only
+        f"M300,18 L320,18 C360,18 {w - 40},68 {w},68 L{w + 300},68 C{w + 340},68 {2 * w - 40},18 {2 * w},18"]
 
 
 def test_layout_fill_targets_stacks_cards_without_a_target_up_from_the_first_wanted_card():

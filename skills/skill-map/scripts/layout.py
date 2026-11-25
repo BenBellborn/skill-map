@@ -4,8 +4,11 @@ their band's column when that saves more flow cost than the cohesion they lose. 
 and each column becomes a packed stack (cards in order, gaps allowed, colliding cards led by the highest-ranked
 card's wanted y) in the order that scores best, with sweeps both ways; the polish ends with one pass of fresh
 wishes, left to right (callers mostly sit left). Before the pull, an edge that skips columns gets a lane card per
-passed column (shared per source), so pull and polish keep a free row for its line; lanes end up in edge `lanes`.
+passed column (shared per source; edges alone in their source's lane share one per target), so pull and polish keep
+a free row for its line; lanes end up in edge `lanes`.
 Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves."""
+from collections import Counter
+
 from usage import get_edge_usage
 
 COLUMN_WIDTH = 380
@@ -35,7 +38,7 @@ POLISH_PASSES = 20  # most sweeps; the polish stops at the first sweep that chan
 LEVEL_RANK = 1_000_000
 # rule: page line runs 18 px below lane top, like card edges: lane level with card at same y stays straight.
 LANE_HEIGHT = 18  # row gap above, line at the lane bottom, row gap below
-LANE_KIND = "lane"  # layout-only card: one slot of a source's edges in a column they pass; never in data["nodes"]
+LANE_KIND = "lane"  # layout-only card, a slot of edges in a column they pass; never in data["nodes"]
 
 
 def apply_layout(data: dict) -> None:
@@ -54,13 +57,13 @@ def set_rows(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list
     """Y of each card and lane: lanes join the columns, then pull and polish run over edges split at their lanes."""
     # rule: usage before lanes: a lane card has callers, never is an entry, and runs no args.
     usage = get_edge_usage(nodes, edges)
-    passed = get_passed_columns(columns, edges)
-    add_lanes(columns, nodes, edges, passed)
-    links, link_usage = split_edges(edges, usage, passed)
+    lanes = get_lane_ids(edges, get_passed_columns(columns, edges))
+    add_lanes(columns, nodes, edges, lanes)
+    links, link_usage = split_edges(edges, usage, lanes)
     pull_linked_cards(columns, nodes, get_links(links))
     improve_columns(columns, nodes, links, link_usage)
     set_top_to_zero(nodes)
-    set_edge_lanes(edges, nodes, passed)
+    set_edge_lanes(edges, nodes, lanes)
 
 
 def get_root_ids(nodes: dict[str, dict]) -> list[str]:
@@ -257,24 +260,52 @@ def get_lane_id(src: str, column: int) -> str:
     return f"{LANE_KIND}:{column}:{src}"
 
 
+def get_join_lane_id(dst: str, column: int) -> str:
+    return f"{LANE_KIND}-in:{column}:{dst}"
+
+
+def get_lane_ids(edges: list[dict], passed: list[list[int]]) -> list[list[str]]:
+    """Per edge, its lane id per passed column, left to right: its source's lane, shared by the source's edges there.
+    Edges into one target that are each alone in their source's lane there share one lane instead."""
+    # rule: source sharing wins: an edge leaves its source's lane only where no other edge of that source uses it.
+    per_source = count_lane_users(edges, passed, "src")
+    alone = [{c for c in columns_passed if per_source[edge["src"], c] == 1}
+             for edge, columns_passed in zip(edges, passed)]
+    per_target = count_lane_users(edges, alone, "dst")
+    return [[get_join_lane_id(edge["dst"], c) if c in solo and per_target[edge["dst"], c] > 1
+             else get_lane_id(edge["src"], c) for c in columns_passed]
+            for edge, columns_passed, solo in zip(edges, passed, alone)]
+
+
+def count_lane_users(edges: list[dict], columns: list, end: str) -> Counter:
+    """Per edge end (`src` or `dst`) id and column, the count of edges with that end that pass that column."""
+    return Counter((edge[end], c) for edge, edge_columns in zip(edges, columns) for c in edge_columns)
+
+
+def get_lane_column(lane_id: str) -> int:
+    return int(lane_id.split(":")[1])
+
+
 def add_lanes(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict],
-              passed: list[list[int]]) -> None:
-    """A lane card per source and passed column, shared by the source's edges, at the mean of the source y and the
-    mean y of those edges' targets."""
-    targets: dict[tuple[str, int], list[str]] = {}
-    for edge, columns_passed in zip(edges, passed):
-        for c in columns_passed:
-            targets.setdefault((edge["src"], c), []).append(edge["dst"])
-    for (src, c), dsts in targets.items():
-        add_lane(columns[c], nodes, get_lane_id(src, c), (nodes[src]["y"] + get_mean_y(nodes, dsts)) / 2)
+              lanes: list[list[str]]) -> None:
+    """A lane card per lane id, at the mean of its edges' mean source y and mean target y."""
+    ends: dict[str, tuple[list[str], list[str]]] = {}
+    for edge, lane_ids in zip(edges, lanes):
+        for lane_id in lane_ids:
+            srcs, dsts = ends.setdefault(lane_id, ([], []))
+            srcs.append(edge["src"])
+            dsts.append(edge["dst"])
+    for lane_id, (srcs, dsts) in ends.items():
+        add_lane(columns[get_lane_column(lane_id)], nodes, lane_id,
+                 (get_mean_y(nodes, srcs) + get_mean_y(nodes, dsts)) / 2)
 
 
-def split_edges(edges: list[dict], usage: list[int], passed: list[list[int]]) -> tuple[list[dict], list[int]]:
+def split_edges(edges: list[dict], usage: list[int], lanes: list[list[str]]) -> tuple[list[dict], list[int]]:
     """Each edge as links from its source through its lanes to its target, each link with the edge's usage."""
     links: list[dict] = []
     link_usage: list[int] = []
-    for edge, paths, columns_passed in zip(edges, usage, passed):
-        points = [edge["src"], *(get_lane_id(edge["src"], c) for c in columns_passed), edge["dst"]]
+    for edge, paths, lane_ids in zip(edges, usage, lanes):
+        points = [edge["src"], *lane_ids, edge["dst"]]
         links += [{"src": a, "dst": b} for a, b in zip(points, points[1:])]
         link_usage += [paths] * (len(points) - 1)
     return links, link_usage
@@ -582,11 +613,11 @@ def set_top_to_zero(nodes: dict[str, dict]) -> None:
         n["y"] = round(n["y"] - top)
 
 
-def set_edge_lanes(edges: list[dict], nodes: dict[str, dict], passed: list[list[int]]) -> None:
+def set_edge_lanes(edges: list[dict], nodes: dict[str, dict], lanes: list[list[str]]) -> None:
     """Each edge that passes columns gets `lanes`: its lane y per passed column, left to right."""
-    for edge, columns_passed in zip(edges, passed):
-        if columns_passed:
-            edge["lanes"] = [nodes[get_lane_id(edge["src"], c)]["y"] for c in columns_passed]
+    for edge, lane_ids in zip(edges, lanes):
+        if lane_ids:
+            edge["lanes"] = [nodes[lane_id]["y"] for lane_id in lane_ids]
 
 
 def fill_targets(targets: list[float | None], heights: list[int]) -> list[float]:
