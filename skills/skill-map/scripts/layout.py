@@ -26,6 +26,7 @@ BACKWARD_COST = 100  # cost of an edge that runs leftward or stays in its column
 PASS_COST = 15  # cost per column an edge passes between its two cards
 # rule: below BACKWARD_COST, so one edge that runs back moves a card out of its band's column.
 COHESION_GAIN = 30  # gain per card that shares a column with the rest of its band
+GAIN_DIGITS = 9  # decimals kept of a place move's score change; float noise sits near 1e-14
 # Polish step gains, in px of edge height, per path.
 # rule: page edges join points 18 px below both card tops: level edge = same top.
 SIBLING_GAIN = 200  # gain per two neighbor cards in a column with a shared caller
@@ -175,9 +176,20 @@ def get_stack_height(blocks: list[list[str]], nodes: dict[str, dict]) -> int:
 
 
 def get_flow_cost(columns: list[list[list[str]]], links: list[tuple[str, str]], pass_cost: int = 0) -> int:
-    column = {i: c for c, blocks in enumerate(columns) for block in blocks for i in block}
-    spans = [column[dst] - column[src] for src, dst in links]
-    return sum(abs(s) + pass_cost * max(abs(s) - 1, 0) + (BACKWARD_COST if s <= 0 else 0) for s in spans)
+    column = get_column_index(columns)
+    return sum(get_span_cost(column[dst] - column[src], pass_cost) for src, dst in links)
+
+
+def get_column_index(columns: list[list[list[str]]]) -> dict[str, int]:
+    return {i: c for c, blocks in enumerate(columns) for i in get_ids(blocks)}
+
+
+def get_ids(blocks: list[list[str]]) -> list[str]:
+    return [i for block in blocks for i in block]
+
+
+def get_span_cost(span: int, pass_cost: int) -> int:
+    return abs(span) + pass_cost * max(abs(span) - 1, 0) + (BACKWARD_COST if span <= 0 else 0)
 
 
 def place_cards(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> list[list[list[str]]]:
@@ -185,21 +197,83 @@ def place_cards(columns: list[list[list[str]]], nodes: dict[str, dict], edges: l
     most, while no column grows past the tallest column; repeat until no move helps."""
     limit = max((get_stack_height(c, nodes) for c in columns), default=0)
     links = [(e["src"], e["dst"]) for e in edges if e["src"] != e["dst"]]
-    band = {i: get_band(n) for i, n in nodes.items()}
-    score = lambda cols: get_flow_cost(cols, links, PASS_COST) - COHESION_GAIN * get_cohesion(cols, band)
+    movable = sorted(i for i, n in nodes.items() if n["kind"] != "command")
     while True:
-        best, best_score = None, score(columns)
-        for node_id in sorted(i for i, n in nodes.items() if n["kind"] != "command"):
-            for target in range(len(columns)):
-                trial = move_card(columns, node_id, target, links)
-                if trial is None or get_stack_height(get_column_of(trial, node_id), nodes) > limit:
-                    continue
-                trial_score = score(trial)
-                if trial_score < best_score:
-                    best, best_score = trial, trial_score
+        best = MoveScorer(columns, nodes, links, limit).get_best_move(movable)
         if best is None:
             return columns
-        columns = best
+        columns = move_card(columns, *best, links)
+
+
+class MoveScorer:
+    """Score change (flow cost less cohesion gain) of moving one card to another column of one layout. Only the
+    card's links and its band's counts in both columns change, unless its column empties: then later columns shift,
+    and the layout is scored whole."""
+
+    def __init__(self, columns: list[list[list[str]]], nodes: dict[str, dict], links: list[tuple[str, str]],
+                 limit: int):
+        self.columns, self.nodes, self.links, self.limit = columns, nodes, links, limit
+        self.band = {i: get_band(n) for i, n in nodes.items()}
+        self.size = Counter(self.band.values())
+        self.links_of = get_links_of(links)
+        self.column = get_column_index(columns)
+        self.counts = [Counter(self.band[i] for i in get_ids(blocks)) for blocks in columns]
+        self.heights = [get_stack_height(blocks, nodes) for blocks in columns]
+        self.current_score: float | None = None
+
+    def get_best_move(self, movable: list[str]) -> tuple[str, int] | None:
+        """(card, target) of the lowest score change below 0; the first such move wins a tie."""
+        best, best_gain = None, 0
+        moves = ((i, t) for i in movable for t in range(len(self.columns)))
+        for node_id, target in moves:
+            gain = self.get_gain(node_id, target)
+            if gain is not None and gain < best_gain:
+                best, best_gain = (node_id, target), gain
+        return best
+
+    def get_score(self, columns: list[list[list[str]]]) -> float:
+        return get_flow_cost(columns, self.links, PASS_COST) - COHESION_GAIN * get_cohesion(columns, self.band)
+
+    def get_gain(self, node_id: str, target: int) -> float | None:
+        """None when the card already sits in the target column or the target grows past the limit."""
+        source = self.column[node_id]
+        if target == source or self.heights[target] + get_card_height(self.nodes[node_id]) + ROW_GAP > self.limit:
+            return None
+        if self.counts[source].total() == 1:
+            gain = self.get_emptying_gain(node_id, target)
+        else:
+            gain = self.get_flow_change(node_id, target) - COHESION_GAIN * self.get_cohesion_change(node_id, target)
+        # rule: rounded, so a whole-layout gain with float noise ties an equal change gain, and the first move wins.
+        return round(gain, GAIN_DIGITS)
+
+    def get_emptying_gain(self, node_id: str, target: int) -> float:
+        if self.current_score is None:
+            self.current_score = self.get_score(self.columns)
+        return self.get_score(move_card(self.columns, node_id, target, self.links)) - self.current_score
+
+    def get_flow_change(self, node_id: str, target: int) -> int:
+        column = self.column
+        change = 0
+        for src, dst in self.links_of.get(node_id, []):
+            new_src, new_dst = (target if i == node_id else column[i] for i in (src, dst))
+            change += get_span_cost(new_dst - new_src, PASS_COST) - get_span_cost(column[dst] - column[src], PASS_COST)
+        return change
+
+    def get_cohesion_change(self, node_id: str, target: int) -> float:
+        band = self.band[node_id]
+        if self.size[band] == 1:
+            return 0
+        source = self.column[node_id]
+        return (self.counts[target][band] - (self.counts[source][band] - 1)) / (self.size[band] - 1)
+
+
+def get_links_of(links: list[tuple[str, str]]) -> dict[str, list[tuple[str, str]]]:
+    """Per card: each link it ends, once per end it holds."""
+    links_of: dict[str, list[tuple[str, str]]] = {}
+    for link in links:
+        for end in link:
+            links_of.setdefault(end, []).append(link)
+    return links_of
 
 
 def get_cohesion(columns: list[list[list[str]]], band: dict[str, int]) -> float:
@@ -237,10 +311,6 @@ def drop_card(columns: list[list[list[str]]], node_id: str) -> list[list[list[st
 def close_up(columns: list[list[list[str]]]) -> list[list[list[str]]]:
     kept = ([block for block in blocks if block] for blocks in columns)
     return [blocks for blocks in kept if blocks]
-
-
-def get_column_of(columns: list[list[list[str]]], node_id: str) -> list[list[str]]:
-    return next(blocks for blocks in columns if any(node_id in block for block in blocks))
 
 
 def set_column_positions(column: int, cards: list[dict]) -> None:

@@ -522,6 +522,51 @@ def test_layout_moves_a_card_out_of_its_band_column_when_an_edge_runs_back():
     assert columns == [[["c"]], [["r", "a1"]], [["s"]], [["a2", "a3"]]]
 
 
+def test_layout_place_cards_move_gain_equals_full_rescore():
+    kinds = {"c": "command", "a1": "agent", "a2": "agent", "s1": "shared", "s2": "shared", "s3": "shared",
+             "m1": "md", "m2": "md"}
+    cards = {i: {"id": i, "kind": k, "mds": []} for i, k in kinds.items()}
+    cards["c"]["mds"] = [{}] * 6
+    # m1 sits alone, so its moves empty a column; s1, s2 share a column in two blocks; a1 -> s1 twice
+    columns = [[["c"]], [["a1", "a2"]], [["s1"], ["s2"]], [["m1"]], [["s3", "m2"]]]
+    links = [("c", "a1"), ("a1", "s1"), ("a1", "s1"), ("a2", "s3"), ("s1", "m1"), ("m2", "s2"), ("c", "m2")]
+    limit = max(layout.get_stack_height(c, cards) for c in columns)
+    band = {i: layout.get_band(n) for i, n in cards.items()}
+    score = lambda cols: (layout.get_flow_cost(cols, links, layout.PASS_COST)
+                          - layout.COHESION_GAIN * layout.get_cohesion(cols, band))
+    scorer = layout.MoveScorer(columns, cards, links, limit)
+    allowed = 0
+    for node_id in kinds:
+        for target in range(len(columns)):
+            trial = layout.move_card(columns, node_id, target, links)
+            home = trial and next(c for c in trial if any(node_id in block for block in c))
+            too_tall = trial is not None and layout.get_stack_height(home, cards) > limit
+            expected = None if trial is None or too_tall else score(trial) - score(columns)
+            gain = scorer.get_gain(node_id, target)
+            assert gain == (None if expected is None else pytest.approx(expected)), (node_id, target)
+            allowed += expected is not None
+    assert 0 < allowed < len(kinds) * (len(columns) - 1)
+
+
+def test_layout_place_cards_tie_goes_to_first_move_when_one_empties_a_column():
+    # n0 leaving its lone column scores whole (float noise), n8 to column 0 by change: both gain -10
+    kinds = {"n0": "tool", "n1": "shared", "n4": "tool", "n5": "skill", "n7": "skill", "n8": "tool", "n9": "skill",
+             "n10": "hook", "n11": "tool", "n12": "shared", "n13": "hook", "n2": "command", "n3": "command",
+             "n6": "hook"}
+    mds = {"n0": 3, "n1": 1, "n2": 1, "n3": 3, "n5": 3, "n6": 1, "n7": 3, "n8": 1, "n9": 3, "n10": 2, "n11": 3,
+           "n13": 1}
+    cards = {i: {"id": i, "kind": k, "mds": [{}] * mds.get(i, 0)} for i, k in kinds.items()}
+    columns = [[["n0"]], [["n11"]], [["n7"], ["n12", "n1", "n5"]], [["n4"]], [["n2", "n9"], ["n13"]],
+               [["n3", "n6"], ["n8", "n10"]]]
+    # place_cards keeps the limit of its start layout; this is the start layout two moves before `columns`
+    limit = max(layout.get_stack_height(c, cards) for c in [[["n0"]], [["n5", "n11"]], [["n7"], ["n12"]],
+                                                            [["n1", "n4"]], [["n2", "n9"], ["n13"]],
+                                                            [["n3", "n6"], ["n8", "n10"]]])
+    scorer = layout.MoveScorer(columns, cards, [], limit)
+    assert scorer.get_gain("n0", 1) == scorer.get_gain("n8", 0) == -10
+    assert scorer.get_best_move(sorted(i for i, k in kinds.items() if k != "command")) == ("n0", 1)
+
+
 def test_layout_pulls_linked_cards_level_and_keeps_column_gaps():
     # SKILLMAP-10.3
     cards = {i: {"id": i, "kind": "skill", "mds": []} for i in "abcd"}
