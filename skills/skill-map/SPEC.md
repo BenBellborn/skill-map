@@ -522,9 +522,9 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      that have an edge into it.
    - Packed stack: cards in order, at least 8 between cards, gaps allowed. Each card wants a y. A card whose only
      caller (the source of an edge into it, self edges left out) sits in another column wants that caller's y, but
-     only the first such card of that caller in stack order. Any other card with an edge to a card in another column
-     wants the weighted median of those cards' y values: per edge its weight; the median is the lowest value at which
-     the summed weights reach half the total. A card that still wants no y wants 8 below the bottom of the card
+     only the first such card of that caller in stack order; a later such card of that caller wants no y and packs
+     8 below the card above it. Any other card with an edge to a card in another column wants the weighted median
+     of those cards' y values: per edge its weight; the median is the lowest value at which the summed weights reach half the total. A card that still wants no y wants 8 below the bottom of the card
      above; a card above the first card that wants a y wants 8 above the top of the card below; when no card wants a
      y, the top card wants 0. The column then takes the y values closest to those wishes in least squares that keep
      the order and at least 8 between cards.

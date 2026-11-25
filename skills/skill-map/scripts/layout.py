@@ -381,8 +381,9 @@ class ColumnScorer:
 
     def get_targets(self, ids: list[str]) -> list[float | None]:
         """Wanted y per card: a card whose only caller sits in another column wants that caller's y, but only the
-        first such card of that caller in column order; any other card with an edge to another column wants the
-        weighted median y of those edges' cards; the rest want none."""
+        first such card of that caller in column order; a later such card of that caller wants none and packs tight
+        under the card above; any other card with an edge to another column wants the weighted median y of those
+        edges' cards; the rest want none."""
         targets: list[float | None] = []
         leveled: set[str] = set()
         for i in ids:
