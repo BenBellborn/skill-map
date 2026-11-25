@@ -521,7 +521,9 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    least 8 between cards.
 1. Polish: first each column becomes a packed stack (see Packed stack). Then sweeps over the columns, left to right on
    even sweeps and right to left on odd ones, until a sweep changes no column or the column orders after a sweep repeat those after an earlier sweep the same way, 20 sweeps at most. In its turn a column takes the card order with the lowest score,
-   found as follows. Repeat: try every move of a run of next cards in one block to another place in that block; keep
+   found as follows. Repeat: try every move of a run of next units in one block to another place in that block, and
+   every move of one lane alone; a unit is a card plus the lanes right under it, and lanes in a row at the block top form
+   one unit; keep
    the try with the lowest score when it is at least 0.5 lower than the current score, the first such try on a tie;
    stop when no try lowers it. The column then takes the packed stack of that order. Last, each column, left to right,
    takes the packed stack of its order once more, with wishes from the other columns' current y values, so no card
@@ -608,6 +610,9 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.15:** Given commands `p` and `q`, `p` calls `m`, `m` calls `t` and `u`, and `p` and `q` call `t`, when
   the layout runs, then the edges `p` to `t` and `q` to `t`, each alone in its source's lane in the column of `m`, get
   the same lane y. When `p` also calls `u`, the edges `p` to `t` and `p` to `u` share a lane and `q` to `t` gets another.
+- **SKILLMAP-10.16:** Given a block `a`, `l1`, `b` (`l1` a lane), when the polish tries moves in that block, then it tries
+  `b`, `a`, `l1` (unit `a` with `l1` after `b`), `l1`, `a`, `b` and `a`, `b`, `l1` (the lane alone), and never `l1`, `b`, `a`,
+  which splits `a` from its lane without moving the lane alone.
 
 ### R11 Page writing
 

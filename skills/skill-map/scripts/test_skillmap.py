@@ -977,7 +977,7 @@ def test_page_problem_holds_repair_prompt_and_skips_stale_skill(tmp_path, capsys
 
 
 def test_layout_run_moves_keep_each_card_with_the_lanes_under_it_except_one_lane_moved_alone():
-    # SKILLMAP-10.14
+    # SKILLMAP-10.16
     kinds = {"a": "skill", "b": "skill", "c": "skill", "l1": layout.LANE_KIND, "l2": layout.LANE_KIND,
              "l3": layout.LANE_KIND}
     nodes = {i: {"id": i, "kind": kind, "mds": []} for i, kind in kinds.items()}
@@ -1002,3 +1002,7 @@ def test_layout_run_moves_keep_each_card_with_the_lanes_under_it_except_one_lane
     lanes = [i for i in block if nodes[i]["kind"] == layout.LANE_KIND]
     assert all(is_whole(m) or any(is_whole([i for i in m if i != lane], lane) for lane in lanes) for m in moves)
     assert len(moves) < 80  # units and lanes alone: far fewer than every run of the 8 ids
+    small = {i: {"id": i, "kind": layout.LANE_KIND if i == "l1" else "skill", "mds": []} for i in ("a", "l1", "b")}
+    tried = list(layout.get_block_moves(["a", "l1", "b"], small))
+    assert ["b", "a", "l1"] in tried and ["l1", "a", "b"] in tried and ["a", "b", "l1"] in tried
+    assert ["l1", "b", "a"] not in tried
