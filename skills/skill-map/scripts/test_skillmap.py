@@ -943,3 +943,31 @@ def test_page_problem_holds_repair_prompt_and_skips_stale_skill(tmp_path, capsys
                                                   "not exist. Fix that name in its md files so it points at an existing file, "
                                                   "then run /skill-map."}
     assert "problem: design-ext: no fragment, run scan" in out and "problem: fix: changed since the map was drawn" in out
+
+
+def test_layout_run_moves_keep_each_card_with_the_lanes_under_it_except_one_lane_moved_alone():
+    # SKILLMAP-10.14
+    kinds = {"a": "skill", "b": "skill", "c": "skill", "l1": layout.LANE_KIND, "l2": layout.LANE_KIND,
+             "l3": layout.LANE_KIND}
+    nodes = {i: {"id": i, "kind": kind, "mds": []} for i, kind in kinds.items()}
+    units = [["l0"], ["a", "l1"], ["b", "l2", "l3"], ["c"]]
+    nodes.update({i: {"id": i, "kind": k, "mds": []} for i, k in (("l0", layout.LANE_KIND), ("z", "skill"))})
+    block = [i for unit in units for i in unit]
+    moves = [m[0] for m in layout.get_run_moves([block, ["z"]], nodes)]
+    assert moves and all(len(m) == len(block) and sorted(m) == sorted(block) for m in moves)
+
+    def get_units(order):
+        found = []
+        for i in order:
+            if found and nodes[i]["kind"] == layout.LANE_KIND:
+                found[-1].append(i)
+            else:
+                found.append([i])
+        return found
+
+    def is_whole(order, alone=None):
+        return all(unit in [[i for i in u if i != alone] for u in units] for unit in get_units(order))
+
+    lanes = [i for i in block if nodes[i]["kind"] == layout.LANE_KIND]
+    assert all(is_whole(m) or any(is_whole([i for i in m if i != lane], lane) for lane in lanes) for m in moves)
+    assert len(moves) < 80  # units and lanes alone: far fewer than every run of the 8 ids

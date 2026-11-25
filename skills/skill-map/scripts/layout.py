@@ -4,7 +4,8 @@ their band's column when that saves more flow cost than the cohesion they lose. 
 and each column becomes a packed stack (cards in order, gaps allowed, colliding cards led by the highest-ranked
 card's wanted y) in the order that scores best, with sweeps both ways; the polish ends with one pass of fresh
 wishes, left to right (callers mostly sit left). Before the pull, an edge that skips columns gets a lane card per
-passed column (shared per source), so pull and polish keep a free row for its line; lanes end up in edge `lanes`."""
+passed column (shared per source), so pull and polish keep a free row for its line; lanes end up in edge `lanes`.
+Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves."""
 from usage import get_edge_usage
 
 COLUMN_WIDTH = 380
@@ -383,8 +384,8 @@ def get_link_weights(edges: list[dict], usage: list[int]) -> dict[str, dict[str,
 
 
 def improve_column(blocks: list[list[str]], scorer: "ColumnScorer") -> bool:
-    """Greedy: move a run of neighbor cards to another place in their block when that lowers the column score most;
-    repeat until no move helps. True when the column changed."""
+    """Greedy: move a run of neighbor cards (with the lanes under them) or one lane to another place in its block
+    when that lowers the column score most; repeat until no move helps. True when the column changed."""
     scorer.start_turn()
     start = best = [list(block) for block in blocks]
     while (found := find_better_order(best, scorer)) is not None:
@@ -395,7 +396,7 @@ def improve_column(blocks: list[list[str]], scorer: "ColumnScorer") -> bool:
 
 
 def find_better_order(current: list[list[str]], scorer: "ColumnScorer") -> list[list[str]] | None:
-    found = min(get_run_moves(current), key=scorer.get_score, default=None)
+    found = min(get_run_moves(current, scorer.nodes), key=scorer.get_score, default=None)
     return found if found and scorer.get_score(found) < scorer.get_score(current) - 0.5 else None
 
 
@@ -538,12 +539,41 @@ def get_weighted_median(wishes: list[tuple[float, int]]) -> float:
     return 0
 
 
-def get_run_moves(blocks: list[list[str]]):
+def get_run_moves(blocks: list[list[str]], nodes: dict[str, dict]):
+    """Orders with one change in one block: a run of neighbor units (a card plus the lanes right under it; a lane at
+    the block top is a unit of its own) at another place, or one lane alone at another place. Units keep the run
+    moves to the count of cards, not of cards and lanes."""
     for b, block in enumerate(blocks):
-        for start, end in ((s, e) for s in range(len(block)) for e in range(s + 1, len(block) + 1)):
-            run, rest = block[start:end], block[:start] + block[end:]
-            for place in (p for p in range(len(rest) + 1) if p != start):
-                yield blocks[:b] + [rest[:place] + run + rest[place:]] + blocks[b + 1:]
+        for order in get_block_moves(block, nodes):
+            yield blocks[:b] + [order] + blocks[b + 1:]
+
+
+def get_block_moves(block: list[str], nodes: dict[str, dict]):
+    units = get_units(block, nodes)
+    for start, end in ((s, e) for s in range(len(units)) for e in range(s + 1, len(units) + 1)):
+        for moved in get_moved(units, start, end):
+            yield [i for unit in moved for i in unit]
+    for k, lane in enumerate(block):
+        if nodes[lane]["kind"] == LANE_KIND:
+            for moved in get_moved(block, k, k + 1):
+                yield moved
+
+
+def get_moved(items: list, start: int, end: int):
+    """Each order of `items` with the run `start`..`end` at another place."""
+    run, rest = items[start:end], items[:start] + items[end:]
+    return (rest[:place] + run + rest[place:] for place in range(len(rest) + 1) if place != start)
+
+
+def get_units(block: list[str], nodes: dict[str, dict]) -> list[list[str]]:
+    """A card and the lanes right under it as one unit; a lane at the top is a unit of its own."""
+    units: list[list[str]] = []
+    for i in block:
+        if units and nodes[i]["kind"] == LANE_KIND:
+            units[-1].append(i)
+        else:
+            units.append([i])
+    return units
 
 
 def set_top_to_zero(nodes: dict[str, dict]) -> None:
