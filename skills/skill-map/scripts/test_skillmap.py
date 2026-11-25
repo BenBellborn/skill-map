@@ -842,6 +842,21 @@ def test_page_edge_runs_a_20_px_stub_out_of_a_card_with_2_out_edges_and_into_a_c
         f"M300,18 L320,18 C360,18 {w - 40},68 {w},68 L{w + 300},68 C{w + 340},68 {2 * w - 40},18 {2 * w},18"]
 
 
+@needs_node
+def test_page_self_edge_counts_for_no_stub_and_a_loop_path_holds_no_stub():
+    # SKILLMAP-12.5
+    w = layout.COLUMN_WIDTH
+    nodes = [{"id": "s", "x": 0, "y": 0}, {"id": "t", "x": w, "y": 0}, {"id": "u", "x": w, "y": 100},
+             {"id": "p", "x": 0, "y": 200}, {"id": "v", "x": 2 * w, "y": 0}]
+    one_out = run_page(nodes[:2], [{"src": "s", "dst": "s"}, {"src": "s", "dst": "t"}])
+    assert one_out["paths"][1] == f"M300,18 C340,18 {w - 40},18 {w},18"  # self edge is no second out edge: no stub
+    loop = run_page(nodes, [{"src": "s", "dst": "t"}, {"src": "s", "dst": "u"}, {"src": "t", "dst": "p"},
+                                  {"src": "t", "dst": "v"}])
+    # t has 2 out edges, yet its loop to p runs no stub
+    assert loop["paths"][2] == f"M{w + 300},18 C{w + 340},18 {w + 340},280 {w + 300},280 L0,280 C-40,280 -40,218 0,218"
+    assert loop["paths"][0].startswith("M300,18 L320,18 ")  # the two real out edges of s keep their stub
+
+
 def test_layout_fill_targets_stacks_cards_without_a_target_up_from_the_first_wanted_card():
     # SKILLMAP-10.9
     assert layout.fill_targets([None, None, 50.0, None], [10, 20, 30, 5]) == [
