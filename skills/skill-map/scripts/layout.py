@@ -571,8 +571,8 @@ def get_weighted_median(wishes: list[tuple[float, int]]) -> float:
 
 
 def get_run_moves(blocks: list[list[str]], nodes: dict[str, dict]):
-    """Orders with one change in one block: a run of neighbor units (a card plus the lanes right under it; a lane at
-    the block top is a unit of its own) at another place, or one lane alone at another place. Units keep the run
+    """Orders with one change in one block: a run of neighbor units (a card plus the lanes right under it; lanes in a
+    row at the block top are one unit) at another place, or one lane alone at another place. Units keep the run
     moves to the count of cards, not of cards and lanes."""
     for b, block in enumerate(blocks):
         for order in get_block_moves(block, nodes):
@@ -597,7 +597,8 @@ def get_moved(items: list, start: int, end: int):
 
 
 def get_units(block: list[str], nodes: dict[str, dict]) -> list[list[str]]:
-    """A card and the lanes right under it as one unit; a lane at the top is a unit of its own."""
+    """A card and the lanes right under it as one unit; lanes in a row at the block top form one unit. Each lane still
+    moves alone (get_block_moves), and fewer units keep the move count low."""
     units: list[list[str]] = []
     for i in block:
         if units and nodes[i]["kind"] == LANE_KIND:

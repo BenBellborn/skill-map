@@ -1006,3 +1006,11 @@ def test_layout_run_moves_keep_each_card_with_the_lanes_under_it_except_one_lane
     tried = list(layout.get_block_moves(["a", "l1", "b"], small))
     assert ["b", "a", "l1"] in tried and ["l1", "a", "b"] in tried and ["a", "b", "l1"] in tried
     assert ["l1", "b", "a"] not in tried
+
+
+def test_layout_get_units_joins_lanes_in_a_row_at_the_block_top_into_one_unit():
+    # SKILLMAP-10.16
+    nodes = {i: {"id": i, "kind": layout.LANE_KIND if i.startswith("l") else "skill", "mds": []}
+             for i in ("l0", "l0b", "a", "l1", "b")}
+    assert layout.get_units(["l0", "l0b", "a", "l1", "b"], nodes) == [["l0", "l0b"], ["a", "l1"], ["b"]]
+    assert ["l0", "b", "l0b", "a"] not in list(layout.get_block_moves(["l0", "l0b", "a", "b"], nodes))
