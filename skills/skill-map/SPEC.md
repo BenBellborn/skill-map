@@ -508,8 +508,8 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    card with no link wants its current y. Each block re-sorts its cards, stable, by wanted y; blocks keep their stack
    order. The column then takes the y values closest to those wishes in least squares that keep that order and at
    least 8 between cards.
-1. Polish: first each column becomes a tight stack (see Tight stack). Then passes over the columns, left to right,
-   until a pass changes no column, 4 passes at most. In its turn a column takes the card order with the lowest score,
+1. Polish: first each column becomes a tight stack (see Tight stack). Then sweeps over the columns, left to right on
+   even sweeps and right to left on odd ones, until a sweep changes no column, 20 sweeps at most. In its turn a column takes the card order with the lowest score,
    found as follows. Repeat: try every move of a run of next cards in one block to another place in that block; keep
    the try with the lowest score when it is at least 0.5 lower than the current score, the first such try on a tie;
    stop when no try lowers it. The column then takes the tight stack of that order.
@@ -526,7 +526,12 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    - Score: per edge to a card in another column, its weight times the absolute y difference of its two cards, or
      times -50 when that difference is 0 (a level edge); less, per two cards next to each other (in stack order) that
      share a source of an edge into both, 200 times the lower use of the two, at least 5000; plus 10 times the use difference of each two
-     cards that share such a source where the less used card sits above.
+     cards that share such a source where the less used card sits above; plus the crossing cost.
+   - Crossing cost: per two edges, each from a card of this column to a card of the same column right next to it
+     (left or right), that cross: 100 times the summed weights of the two edges. Two such edges cross when their cards
+     in this column and their other cards sit in opposite order; edges that share a card never cross. Self edges,
+     edges inside one column and edges to a column further away are left out. The other cards' y values are those at
+     the start of the column's turn.
 1. Last, all y values shift so the top card sits at 0, rounded to whole pixels.
 
 - **SKILLMAP-10.1:** Given `fix` calls `plan` and `plan` calls `fix`, when `render` runs, then edge fix to plan has
@@ -553,6 +558,11 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.9:** Given command `c` calls shared `s` with `callArgs` `opus`, `s` has arg `max`, spawns `w` only
   under `max` and spawns `f` always, and the agent column holds `w` above `f`, when the polish runs, then the edge
   usage is 1 for `c` to `s`, 0 for `s` to `w` and 1 for `s` to `f`, and `f` sits above `w`, level with `s`.
+- **SKILLMAP-10.10:** Given column `p`, `q`, `r` (`r` with 3 OwnMd lines), column `a`, `b` and edges `p` to `a`, `q`
+  to `b`, `r` to `a` and `r` to `b`, when the polish runs, then no two edges with four distinct cards cross. Given
+  column `m1` above `m2` with edges `m1` to `l2` and `m2` to `l1` (left column, `l1` above `l2`), both to `r1` (right
+  column) and `m1` to `f2`, `m2` to `f1` two columns away, all weight 1, then the only crossing cost is 200, for `m1`
+  above `m2`.
 
 ### R11 Page writing
 

@@ -570,6 +570,39 @@ def test_layout_polish_puts_the_most_used_card_level_with_its_caller():
     assert columns[2] == [["f", "w"]] and cards["f"]["y"] == cards["s"]["y"]
 
 
+def count_crossings(cards: dict[str, dict], edges: list[dict]) -> int:
+    """Two edges with four distinct cards cross when their ends sit in opposite order."""
+    pairs = [(e, f) for k, e in enumerate(edges) for f in edges[k + 1:]
+             if len({e["src"], e["dst"], f["src"], f["dst"]}) == 4]
+    return sum((cards[e["src"]]["y"] - cards[f["src"]]["y"]) * (cards[e["dst"]]["y"] - cards[f["dst"]]["y"]) < 0
+               for e, f in pairs)
+
+
+def test_layout_polish_uncrosses_edges_between_neighbour_columns():
+    # SKILLMAP-10.10
+    cards = {i: {"id": i, "kind": "skill", "mds": []} for i in ("p", "q", "r", "a", "b")}
+    cards["r"]["mds"] = [{}] * 3
+    columns = [[["p", "q", "r"]], [["a", "b"]]]
+    for x, blocks in enumerate(columns):
+        layout.set_column_positions(x, [cards[i] for i in blocks[0]])
+    edges = [{"src": s, "dst": d} for s, d in (("p", "a"), ("q", "b"), ("r", "a"), ("r", "b"))]
+    layout.improve_columns(columns, cards, edges)
+    assert count_crossings(cards, edges) == 0
+
+
+def test_layout_polish_counts_only_crossings_into_a_neighbour_column_with_four_cards():
+    # SKILLMAP-10.10
+    xs = {"l1": 0, "l2": 0, "m1": 1, "m2": 1, "r1": 2, "f1": 3, "f2": 3}
+    cards = {i: {"id": i, "kind": "skill", "mds": [], "x": x * layout.COLUMN_WIDTH, "y": i.endswith("2") * 100}
+             for i, x in xs.items()}
+    links = (("m1", "l2"), ("m2", "l1"), ("m1", "r1"), ("m2", "r1"), ("m1", "f2"), ("m2", "f1"))
+    weights: dict[str, dict[str, int]] = {}
+    for a, b in links:
+        weights.setdefault(a, {})[b] = weights.setdefault(b, {})[a] = 1
+    scorer = layout.ColumnScorer([["m1", "m2"]], cards, weights, {})
+    assert scorer.crossings == {("m1", "m2"): 2 * layout.CROSSING_COST}
+
+
 def test_agent_runs_come_from_count_and_many_runs_get_batch_hint(tmp_path, capsys):
     # SKILLMAP-16.1
     root, cache = make_tree(tmp_path)
