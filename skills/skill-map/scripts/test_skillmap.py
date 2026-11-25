@@ -770,6 +770,27 @@ def test_layout_keeps_a_direct_child_level_with_its_source_when_a_lane_of_that_s
     assert edges[2]["lanes"] and cards["a"]["y"] == cards["s"]["y"]
 
 
+def test_layout_polish_window_score_equals_full_score():
+    # SKILLMAP-10.12
+    places = {"p": (0, 0), "l1": (0, 100), "l2": (0, 300), "r1": (2, 50), "r2": (2, 200)}
+    cards = {i: {"id": i, "kind": "skill", "mds": [], "x": x * layout.COLUMN_WIDTH, "y": y} for i, (x, y) in places.items()}
+    blocks = [["n1", "n2", "a", "L", "M", "d"], ["b", "c"]]  # M: lane of a's caller; d: second card of a's caller
+    cards |= {i: {"id": i, "kind": layout.LANE_KIND if i in "LM" else "skill", "mds": [], "x": layout.COLUMN_WIDTH,
+                  "y": 0} for block in blocks for i in block}
+    weights: dict[str, dict[str, int]] = {}
+    for a, b, w in (("a", "p", 2), ("c", "p", 1), ("d", "p", 3), ("M", "p", 1), ("a", "r2", 1), ("b", "l1", 3),
+                    ("b", "r1", 1), ("L", "l2", 1), ("L", "r1", 2)):
+        weights.setdefault(a, {})[b] = weights.setdefault(b, {})[a] = w
+    callers = {"a": {"p"}, "c": {"p"}, "d": {"p"}, "M": {"p"}}
+    scorer = layout.ColumnScorer(blocks, cards, weights, callers)
+    fresh = layout.ColumnScorer(blocks, cards, weights, callers)
+    for current in [blocks, *layout.get_run_moves(blocks, cards)]:  # lanes, crossings, shared caller, top cards with no wish
+        scorer.set_current(current)
+        reversed_order = [block[::-1] for block in current[::-1]]  # not one swap of two parts
+        for order in [*layout.get_run_moves(current, cards), current, reversed_order]:
+            assert scorer.get_order_score(order) == fresh.get_order_score(order), (current, order)
+
+
 @pytest.mark.parametrize("ids, wanted", [(["lane", "a"], [None, 0]), (["a", "lane"], [0, None]), (["lane"], [0])])
 def test_layout_gives_the_level_target_to_a_real_card_before_a_lane_of_the_same_caller(ids, wanted):
     # SKILLMAP-10.14

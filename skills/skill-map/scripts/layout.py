@@ -8,6 +8,7 @@ passed column (shared per source; edges alone in their source's lane share one p
 a free row for its line; lanes end up in edge `lanes`.
 Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves."""
 from collections import Counter
+from typing import NamedTuple
 
 from usage import get_edge_usage
 
@@ -40,6 +41,19 @@ LEVEL_RANK = 1_000_000
 # rule: page line runs 18 px below lane top, like card edges: lane level with card at same y stays straight.
 LANE_HEIGHT = 18  # row gap above, line at the lane bottom, row gap below
 LANE_KIND = "lane"  # layout-only card, a slot of edges in a column they pass; never in data["nodes"]
+# rule: tuples, not objects: hot path, the polish packs every order it scores.
+# Packed block: first card, card count, highest rank, targets of cards of that rank less their offsets from the anchor
+# card, count of those cards, anchor card.
+Block = tuple[int, int, int, float, int, int]
+
+
+class OrderFacts(NamedTuple):
+    """Facts of the column order the polish moves from: its cards, index of the first card with a target, crossed
+    cost, and the packed stack after each count of top cards."""
+    ids: list[str]
+    first_target: int
+    crossed: float
+    stacks: list[list[Block]]
 
 
 def apply_layout(data: dict) -> None:
@@ -489,7 +503,10 @@ def improve_column(blocks: list[list[str]], scorer: "ColumnScorer") -> bool:
     when that lowers the column score most; repeat until no move helps. True when the column changed."""
     scorer.start_turn()
     start = best = [list(block) for block in blocks]
-    while (found := find_better_order(best, scorer)) is not None:
+    while True:
+        scorer.set_current(best)
+        if (found := find_better_order(best, scorer)) is None:
+            break
         best = found
     blocks[:] = best
     scorer.set_ys(blocks)
@@ -534,9 +551,25 @@ class ColumnScorer:
         self.outside_ys = {i: [(self.nodes[j]["y"], w) for j, w in links] for i, links in self.outside.items()}
         self.wishes = {i: self.nodes[c]["y"] if (c := self.single_caller[i]) else
                        get_weighted_median(wishes) if wishes else None for i, wishes in self.outside_ys.items()}
+        self.set_crossings()
+        self.current: OrderFacts | None = None
+
+    def set_crossings(self) -> None:
+        """Crossing cost of each two cards, upper first: as pairs that cost, and as a full table by upper card."""
         self.crossings: dict[tuple[str, str], float] = {
             (a, b): cost for a in self.neighbors for b in self.neighbors
             if a != b and (cost := self.get_crossing_cost(a, b))}
+        self.crossings_with = {a: {b: self.crossings.get((a, b), 0) for b in self.neighbors} for a in self.neighbors}
+
+    def set_current(self, blocks: list[list[str]]) -> None:
+        """Later scores pack and count crossings only from where an order first differs from this one."""
+        ids = get_ids(blocks)
+        targets, ranks, tight = self.get_pack_inputs(ids)
+        stacks: list[list[Block]] = [[]]
+        for k in range(len(ids)):
+            stacks.append(pack_blocks(stacks[-1], range(k, k + 1), targets, ranks, tight))
+        first_target = next((k for k, t in enumerate(self.get_targets(ids)) if t is not None), len(ids))
+        self.current = OrderFacts(ids, first_target, self.get_full_crossed_cost(ids), stacks)
 
     def get_crossing_cost(self, upper: str, lower: str) -> float:
         """CROSSING_COST per path of both edges, per two edges to cards in one neighbor column that cross when
@@ -557,10 +590,26 @@ class ColumnScorer:
     def get_ys(self, blocks: list[list[str]]) -> dict[str, float]:
         """Cards in order, at least ROW_GAP apart; where cards collide, the highest-ranked sits on its wanted y
         (`get_ranks`, `get_packed_ys`)."""
-        ids = [i for block in blocks for i in block]
+        ids = get_ids(blocks)
+        targets, ranks, tight = self.get_pack_inputs(ids)
+        start = self.get_pack_start(ids)
+        stack = self.current.stacks[start] if start else []
+        return dict(zip(ids, get_block_ys(pack_blocks(stack, range(start, len(ids)), targets, ranks, tight), tight)))
+
+    def get_pack_inputs(self, ids: list[str]) -> tuple[list[float], list[int], list[int]]:
+        """Filled targets, ranks and tight ys of the cards in order."""
         heights = [self.heights[i] for i in ids]
         targets = self.get_targets(ids)
-        return dict(zip(ids, get_packed_ys(heights, fill_targets(targets, heights), self.get_ranks(ids, targets))))
+        return fill_targets(targets, heights), self.get_ranks(ids, targets), get_tight_ys(heights)
+
+    def get_pack_start(self, ids: list[str]) -> int:
+        """Count of top cards that pack as in the current order: those before the first change, when a card above
+        the change has a target; otherwise the change back-fills their targets (`fill_targets`). 0 with no current
+        order."""
+        if self.current is None:
+            return 0
+        start = get_changed_range(self.current.ids, ids).start
+        return start if self.current.first_target < start else 0
 
     def get_ranks(self, ids: list[str], targets: list[float | None]) -> list[int]:
         """Rank per card in a packed block: -1 with no target; a card level with its single caller above every
@@ -604,7 +653,26 @@ class ColumnScorer:
         return edges - siblings + ORDER_COST * flipped + self.get_crossed_cost(ids)
 
     def get_crossed_cost(self, ids: list[str]) -> float:
-        """Crossing cost of each two cards, upper first."""
+        """Crossing cost of each two cards, upper first. An order that swaps two neighbor parts of the current order
+        (each polish move) changes only the pairs of one card from each part."""
+        parts = self.get_swapped_parts(ids)
+        if parts is None:
+            return self.get_full_crossed_cost(ids)
+        upper, lower = parts
+        crossings = self.crossings_with
+        return self.current.crossed + sum(crossings[b][a] - crossings[a][b] for a in upper for b in lower)
+
+    def get_swapped_parts(self, ids: list[str]) -> tuple[list[str], list[str]] | None:
+        """The upper and lower part of the current order that swap places in this order; None with no current
+        order or another change."""
+        if self.current is None:
+            return None
+        old, window = self.current.ids, get_changed_range(self.current.ids, ids)
+        split = old.index(ids[window.start], window.start, window.stop) if window else window.start
+        upper, lower = old[window.start:split], old[split:window.stop]
+        return (upper, lower) if ids[window.start:window.stop] == lower + upper else None
+
+    def get_full_crossed_cost(self, ids: list[str]) -> float:
         place = {i: k for k, i in enumerate(ids)}
         return sum(cost for (a, b), cost in self.crossings.items() if place[a] < place[b])
 
@@ -726,18 +794,33 @@ def get_packed_ys(heights: list[int], targets: list[float], ranks: list[int]) ->
     # rule: polish packs per scored order, so merges move no card; offset in block = tight y less anchor card's.
     # rule: anchor = a top-ranked card: a lone top card lands exactly on its target, a level edge stays level.
     tight = get_tight_ys(heights)
-    # rule: tuples, not objects: hot path, the polish packs every order it scores.
-    # per block, top block first: first card, card count, highest rank, targets of cards of that rank less their
-    # offsets from the anchor card, count of those cards, anchor card
-    blocks: list[tuple[int, int, int, float, int, int]] = []
-    for i, (target, rank) in enumerate(zip(targets, ranks)):
-        add_block(blocks, (i, 1, rank, target, 1, i), tight)
+    return get_block_ys(pack_blocks([], range(len(heights)), targets, ranks, tight), tight)
+
+
+def pack_blocks(stack: list[Block], cards: range, targets: list[float], ranks: list[int], tight: list[int]) -> list[Block]:
+    """The stack of packed blocks after the cards are added under `stack`, the packed blocks of the cards above."""
+    # rule: a card merges only upward, so the stack after the first k cards depends on those cards alone.
+    blocks = list(stack)
+    for i in cards:
+        add_block(blocks, (i, 1, ranks[i], targets[i], 1, i), tight)
+    return blocks
+
+
+def get_block_ys(blocks: list[Block], tight: list[int]) -> list[float]:
     return [total / top + (tight[k] - tight[anchor])
             for first, count, _, total, top, anchor in blocks for k in range(first, first + count)]
 
 
-def add_block(blocks: list[tuple[int, int, int, float, int, int]], block: tuple[int, int, int, float, int, int],
-              tight: list[int]) -> None:
+def get_changed_range(old: list[str], new: list[str]) -> range:
+    """Indexes from the first to the last place where two orders of the same cards differ; empty when equal."""
+    lo = next((k for k, (a, b) in enumerate(zip(old, new)) if a != b), len(new))
+    if lo == len(new):
+        return range(lo, lo)
+    hi = next(k for k in range(len(new) - 1, lo - 1, -1) if old[k] != new[k])
+    return range(lo, hi + 1)
+
+
+def add_block(blocks: list[Block], block: Block, tight: list[int]) -> None:
     """Adds the block under the others; it merges with each block above that it would overlap."""
     while blocks:
         above = blocks[-1]
@@ -748,8 +831,7 @@ def add_block(blocks: list[tuple[int, int, int, float, int, int]], block: tuple[
     blocks.append(block)
 
 
-def merge_blocks(above: tuple[int, int, int, float, int, int], below: tuple[int, int, int, float, int, int],
-                 start: float) -> tuple[int, int, int, float, int, int]:
+def merge_blocks(above: Block, below: Block, start: float) -> Block:
     """One block of two packed blocks; the anchor of `below` sits `start` under the anchor of `above`."""
     first, count, rank, total, top, anchor = above
     _, below_count, below_rank, below_total, below_top, below_anchor = below
