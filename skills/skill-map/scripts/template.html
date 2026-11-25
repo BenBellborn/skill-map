@@ -201,11 +201,11 @@ svg#edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-even
       columns.get(n.x).push(n);
     }
     for (const col of columns.values()) {
-      // rule: a column is a tight stack from its top card's layout y, in layout order, 8 px between cards.
+      // rule: cards keep layout y and order; a card moves down only when within 8 px of the card above.
       col.sort((a, b) => a.y - b.y);
       let bottom = col[0].y;
       for (const n of col) {
-        n.y = bottom;
+        n.y = Math.max(n.y, bottom);
         cards.get(n.id).style.top = n.y + "px";
         bottom = n.y + cards.get(n.id).offsetHeight + 8;
       }

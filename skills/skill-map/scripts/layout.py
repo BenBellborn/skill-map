@@ -1,7 +1,8 @@
 """Places map cards in columns: one band of columns per kind, callers left of callees inside a band; then whole
 columns stack under others while that makes edges flow left to right with shorter spans; last, single cards leave
 their band's column when that saves more flow cost than the cohesion they lose. Rubber bands then sort each column,
-and each column becomes a tight stack in the order that scores best, with sweeps both ways."""
+and each column becomes a packed stack (cards in order, gaps allowed, each near its wanted y) in the order that
+scores best, with sweeps both ways."""
 from usage import get_edge_usage
 
 COLUMN_WIDTH = 380
@@ -262,22 +263,33 @@ def pull_linked_cards(columns: list[list[list[str]]], nodes: dict[str, dict], li
 
 def set_column_ys(blocks: list[list[str]], nodes: dict[str, dict], wanted: dict[str, float]) -> None:
     ids = [i for block in blocks for i in block]
-    for i, y in zip(ids, pack_column([get_card_height(nodes[i]) for i in ids], [wanted[i] for i in ids])):
+    for i, y in zip(ids, get_packed_ys([get_card_height(nodes[i]) for i in ids], [wanted[i] for i in ids])):
         nodes[i]["y"] = y
 
 
 def improve_columns(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> None:
-    """Each column becomes a tight stack; then sweeps alternate left to right and right to left until a sweep
-    changes no column, each column taking its best order (`improve_column`)."""
+    """Each column becomes a packed stack; then sweeps alternate left to right and right to left until a sweep
+    changes no column or the column orders repeat those after an earlier sweep the same way, each column taking its
+    best order (`improve_column`)."""
     weights = get_link_weights(edges, get_edge_usage(nodes, edges))
     callers = get_callers(edges)
     scorers = [ColumnScorer(blocks, nodes, weights, callers) for blocks in columns]
     for blocks, scorer in zip(columns, scorers):
+        scorer.start_turn()
         scorer.set_ys(blocks)
-    pairs = list(zip(columns, scorers))
+    sweep_columns(columns, scorers)
+
+
+def sweep_columns(columns: list[list[list[str]]], scorers: list["ColumnScorer"]) -> None:
+    pairs, seen = list(zip(columns, scorers)), set()
     for sweep in range(POLISH_PASSES):
         if not any([improve_column(blocks, scorer) for blocks, scorer in (pairs if sweep % 2 == 0 else pairs[::-1])]):
             return
+        # rule: packed stacks move cards between sweeps, so orders can cycle; a repeat only repeats work.
+        state = (sweep % 2, str(columns))
+        if state in seen:
+            return
+        seen.add(state)
 
 
 def get_link_weights(edges: list[dict], usage: list[int]) -> dict[str, dict[str, int]]:
@@ -309,18 +321,26 @@ def find_better_order(current: list[list[str]], scorer: "ColumnScorer") -> list[
 
 
 class ColumnScorer:
-    """Scores card orders of one tight column against the cards of other columns, which stay put. Every term counts
+    """Scores card orders of one packed column against the cards of other columns, which stay put. Every term counts
     once per path that crosses it, so often used edges weigh most."""
 
     def __init__(self, blocks: list[list[str]], nodes: dict[str, dict], weights: dict[str, dict[str, int]],
                  callers: dict[str, set[str]]):
         self.nodes, self.callers = nodes, callers
         ids = [i for block in blocks for i in block]
-        self.outside = {i: [(j, w) for j, w in weights.get(i, {}).items() if j not in ids] for i in ids}
+        self.outside = {i: get_outside_links(weights.get(i, {}), ids) for i in ids}
         self.neighbors = {i: self.get_neighbor_links(i) for i in ids}
         self.use = {i: get_use(weights.get(i, {}), callers.get(i, set())) for i in ids}
-        self.ranked = self.get_ranked_pairs(ids)
+        self.set_pack_facts(ids)
         self.start_turn()
+
+    def set_pack_facts(self, ids: list[str]) -> None:
+        """Facts no turn changes: single callers, heights, and order ranks and sibling gains of each two cards with
+        a shared caller."""
+        self.single_caller = {i: self.get_outside_single_caller(i, ids) for i in ids}
+        self.heights = {i: get_card_height(self.nodes[i]) for i in ids}
+        self.ranked = self.get_ranked_pairs(ids)
+        self.sibling_gains = self.get_sibling_gains(ids)
 
     def get_neighbor_links(self, node_id: str) -> list[tuple[str, int]]:
         """Links to cards in the column right next to this one, left or right."""
@@ -328,8 +348,11 @@ class ColumnScorer:
         return [(j, w) for j, w in self.outside[node_id] if abs(self.nodes[j]["x"] - x) == COLUMN_WIDTH]
 
     def start_turn(self) -> None:
-        """Scores and crossing costs hold the other columns' y values of this turn only."""
+        """Scores, crossing costs and median wishes hold the other columns' y values of this turn only."""
         self.scores: dict[tuple[str, ...], float] = {}
+        self.outside_ys = {i: [(self.nodes[j]["y"], w) for j, w in links] for i, links in self.outside.items()}
+        self.wishes = {i: self.nodes[c]["y"] if (c := self.single_caller[i]) else
+                       get_weighted_median(wishes) if wishes else None for i, wishes in self.outside_ys.items()}
         self.crossings: dict[tuple[str, str], float] = {
             (a, b): cost for a in self.neighbors for b in self.neighbors
             if a != b and (cost := self.get_crossing_cost(a, b))}
@@ -351,17 +374,28 @@ class ColumnScorer:
             self.nodes[node_id]["y"] = y
 
     def get_ys(self, blocks: list[list[str]]) -> dict[str, float]:
-        """Cards ROW_GAP apart; the column top makes the weighted median edge to another column level, which gives
-        the least weighted edge height."""
-        ids, offset, offsets = [i for block in blocks for i in block], 0, {}
-        for node_id in ids:
-            offsets[node_id] = offset
-            offset += get_card_height(self.nodes[node_id]) + ROW_GAP
-        top = get_weighted_median(self.get_top_wishes(offsets))
-        return {i: top + offsets[i] for i in ids}
+        """Cards in order, at least ROW_GAP apart, each as near its wanted y as the column allows (`get_packed_ys`)."""
+        ids = [i for block in blocks for i in block]
+        heights = [self.heights[i] for i in ids]
+        return dict(zip(ids, get_packed_ys(heights, fill_targets(self.get_targets(ids), heights))))
 
-    def get_top_wishes(self, offsets: dict[str, int]) -> list[tuple[float, int]]:
-        return [(self.nodes[j]["y"] - offsets[i], w) for i in offsets for j, w in self.outside[i]]
+    def get_targets(self, ids: list[str]) -> list[float | None]:
+        """Wanted y per card: a card whose only caller sits in another column wants that caller's y, but only the
+        first such card of that caller in column order; any other card with an edge to another column wants the
+        weighted median y of those edges' cards; the rest want none."""
+        targets: list[float | None] = []
+        leveled: set[str] = set()
+        for i in ids:
+            caller = self.single_caller[i]
+            targets.append(None if caller in leveled else self.wishes[i])
+            if caller:
+                leveled.add(caller)
+        return targets
+
+    def get_outside_single_caller(self, node_id: str, ids: list[str]) -> str | None:
+        """The only caller of the card when it sits in another column, else None."""
+        callers = self.callers.get(node_id, set())
+        return next(iter(callers)) if len(callers) == 1 and callers.isdisjoint(ids) else None
 
     def get_score(self, blocks: list[list[str]]) -> float:
         order = tuple(i for block in blocks for i in block)
@@ -375,15 +409,20 @@ class ColumnScorer:
         a more used one with the same caller; plus the crossing cost of each two cards, upper first. Edge terms count
         per crossing path."""
         ys = self.get_ys(blocks)
-        edges = sum(w * (abs(y - self.nodes[j]["y"]) or -LEVEL_GAIN) for i, y in ys.items() for j, w in self.outside[i])
+        edges = sum(w * (abs(y - v) or -LEVEL_GAIN) for i, y in ys.items() for v, w in self.outside_ys[i])
         ids = list(ys)
-        siblings = sum(self.get_sibling_gain(a, b) for a, b in zip(ids, ids[1:]) if self.share_caller(a, b))
+        siblings = sum(self.sibling_gains.get(pair, 0) for pair in zip(ids, ids[1:]))
         flipped = sum(diff for a, b, diff in self.ranked if ys[a] > ys[b])
         return edges - siblings + ORDER_COST * flipped + self.get_crossed_cost(ids)
 
     def get_crossed_cost(self, ids: list[str]) -> float:
         """Crossing cost of each two cards, upper first."""
-        return sum(self.crossings.get((a, b), 0) for k, a in enumerate(ids) for b in ids[k + 1:])
+        place = {i: k for k, i in enumerate(ids)}
+        return sum(cost for (a, b), cost in self.crossings.items() if place[a] < place[b])
+
+    def get_sibling_gains(self, ids: list[str]) -> dict[tuple[str, str], float]:
+        """Sibling gain of each two cards with a shared caller, both ways."""
+        return {(a, b): self.get_sibling_gain(a, b) for a in ids for b in ids if a != b and self.share_caller(a, b)}
 
     def get_sibling_gain(self, a: str, b: str) -> float:
         """SIBLING_GAIN per path into the less used card, at least SIBLING_FLOOR."""
@@ -391,6 +430,11 @@ class ColumnScorer:
 
     def share_caller(self, a: str, b: str) -> bool:
         return bool(self.callers.get(a, set()) & self.callers.get(b, set()))
+
+
+def get_outside_links(weights: dict[str, int], ids: list[str]) -> list[tuple[str, int]]:
+    """Linked cards outside the column, with their weights."""
+    return [(j, w) for j, w in weights.items() if j not in ids]
 
 
 def get_use(weights: dict[str, int], callers: set[str]) -> int:
@@ -422,29 +466,48 @@ def set_top_to_zero(nodes: dict[str, dict]) -> None:
         n["y"] = round(n["y"] - top)
 
 
-def pack_column(heights: list[int], targets: list[float]) -> list[float]:
+def fill_targets(targets: list[float | None], heights: list[int]) -> list[float]:
+    """A card that wants no y wants tight under the card above; above the first wanted y, tight over the card
+    below. A column where no card wants a y starts at 0."""
+    first = next((k for k, t in enumerate(targets) if t is not None), 0)
+    filled = list(targets)
+    if filled and filled[first] is None:
+        filled[first] = 0.0
+    for k in range(first, 0, -1):
+        filled[k - 1] = filled[k] - heights[k - 1] - ROW_GAP
+    for k in range(1, len(filled)):
+        if filled[k] is None:
+            filled[k] = filled[k - 1] + heights[k - 1] + ROW_GAP
+    return filled
+
+
+def get_tight_ys(heights: list[int]) -> list[int]:
+    """Y of each card in a stack from 0 with ROW_GAP between cards."""
+    tight = [0] * len(heights)
+    for k in range(1, len(heights)):
+        tight[k] = tight[k - 1] + heights[k - 1] + ROW_GAP
+    return tight
+
+
+def get_packed_ys(heights: list[int], targets: list[float]) -> list[float]:
     """Least-squares y per card, in order, no overlap: a card that would overlap the one above joins its block, and
     a block sits at the mean of its cards' targets less their offsets in the block."""
-    blocks: list[list[int]] = []  # card indexes, top block first
-    offset = [0.0] * len(heights)
-    def place(block: list[int]) -> float:
-        return sum(targets[k] - offset[k] for k in block) / len(block)
-    def bottom(block: list[int]) -> float:
-        return place(block) + offset[block[-1]] + heights[block[-1]]
-    for i in range(len(heights)):
-        block = [i]
-        while blocks and bottom(blocks[-1]) + ROW_GAP > place(block):
-            above = blocks.pop()
-            start = offset[above[-1]] + heights[above[-1]] + ROW_GAP
-            for k in block:
-                offset[k] += start
-            block = above + block
-        blocks.append(block)
-    ys = [0.0] * len(heights)
-    for block in blocks:
-        for k in block:
-            ys[k] = place(block) + offset[k]
-    return ys
+    # rule: polish packs per scored order, so merges move no card; offset in block = tight y less first card's.
+    tight = get_tight_ys(heights)
+    # per block, top block first: first card, sum of its cards' targets less their offsets, card count
+    blocks: list[tuple[int, float, int]] = []
+    for i, target in enumerate(targets):
+        first, total, count = i, target, 1
+        while blocks:
+            above, above_total, above_count = blocks[-1]
+            start = tight[first] - tight[above]
+            if above_total / above_count + start <= total / count:
+                break
+            blocks.pop()
+            first, total, count = above, above_total + total - start * count, above_count + count
+        blocks.append((first, total, count))
+    return [total / count + (tight[k] - tight[first])
+            for first, total, count in blocks for k in range(first, first + count)]
 
 
 def get_card_height(card: dict) -> int:

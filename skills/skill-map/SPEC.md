@@ -508,11 +508,11 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    card with no link wants its current y. Each block re-sorts its cards, stable, by wanted y; blocks keep their stack
    order. The column then takes the y values closest to those wishes in least squares that keep that order and at
    least 8 between cards.
-1. Polish: first each column becomes a tight stack (see Tight stack). Then sweeps over the columns, left to right on
-   even sweeps and right to left on odd ones, until a sweep changes no column, 20 sweeps at most. In its turn a column takes the card order with the lowest score,
+1. Polish: first each column becomes a packed stack (see Packed stack). Then sweeps over the columns, left to right on
+   even sweeps and right to left on odd ones, until a sweep changes no column or the column orders after a sweep repeat those after an earlier sweep the same way, 20 sweeps at most. In its turn a column takes the card order with the lowest score,
    found as follows. Repeat: try every move of a run of next cards in one block to another place in that block; keep
    the try with the lowest score when it is at least 0.5 lower than the current score, the first such try on a tie;
-   stop when no try lowers it. The column then takes the tight stack of that order.
+   stop when no try lowers it. The column then takes the packed stack of that order.
    - Usage: paths start at each entry card (a command, or a card no edge points at), once bare and once with each
      of the card's own args alone, and follow edges that are not loop backs or self edges. An edge with args is
      followed only when the path runs with one of them. A spawn passes on the path's args; a call or load passes the
@@ -520,9 +520,14 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      of paths that end with it.
    - Weight of two linked cards: per edge between them, its usage plus 1. Use of a card: the weights to the cards
      that have an edge into it.
-   - Tight stack: cards in order, 8 between cards. The top is the weighted median wish: per edge to a card in another
-     column, the wish is that card's y less the card's offset in the stack, with its weight; the median is the
-     lowest wish at which the summed weights reach half the total, 0 without wishes.
+   - Packed stack: cards in order, at least 8 between cards, gaps allowed. Each card wants a y. A card whose only
+     caller (the source of an edge into it, self edges left out) sits in another column wants that caller's y, but
+     only the first such card of that caller in stack order. Any other card with an edge to a card in another column
+     wants the weighted median of those cards' y values: per edge its weight; the median is the lowest value at which
+     the summed weights reach half the total. A card that still wants no y wants 8 below the bottom of the card
+     above; a card above the first card that wants a y wants 8 above the top of the card below; when no card wants a
+     y, the top card wants 0. The column then takes the y values closest to those wishes in least squares that keep
+     the order and at least 8 between cards.
    - Score: per edge to a card in another column, its weight times the absolute y difference of its two cards, or
      times -50 when that difference is 0 (a level edge); less, per two cards next to each other (in stack order) that
      share a source of an edge into both, 200 times the lower use of the two, at least 5000; plus 10 times the use difference of each two
@@ -557,12 +562,17 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
   card sits between `a1` and `a2`; and the next column is a tight stack, 90 between card tops.
 - **SKILLMAP-10.9:** Given command `c` calls shared `s` with `callArgs` `opus`, `s` has arg `max`, spawns `w` only
   under `max` and spawns `f` always, and the agent column holds `w` above `f`, when the polish runs, then the edge
-  usage is 1 for `c` to `s`, 0 for `s` to `w` and 1 for `s` to `f`, and `f` sits above `w`, level with `s`.
+  usage is 1 for `c` to `s`, 0 for `s` to `w` and 1 for `s` to `f`, and `f` sits above `w`, level with `s`, and `w`
+  sits 8 below the bottom of `f`.
 - **SKILLMAP-10.10:** Given column `p`, `q`, `r` (`r` with 3 OwnMd lines), column `a`, `b` and edges `p` to `a`, `q`
   to `b`, `r` to `a` and `r` to `b`, when the polish runs, then no two edges with four distinct cards cross. Given
   column `m1` above `m2` with edges `m1` to `l2` and `m2` to `l1` (left column, `l1` above `l2`), both to `r1` (right
   column) and `m1` to `f2`, `m2` to `f1` two columns away, all weight 1, then the only crossing cost is 200, for `m1`
   above `m2`.
+- **SKILLMAP-10.11:** Given entry cards `r` and `q`, `r` calls `x` (5 OwnMd lines) and `c`, `q` calls `x`, `x` calls
+  `f1`, `f1` calls `f2`, `c` calls `s` and `s` calls `a`, all skills, when the layout runs, then `x` sits above `c`,
+  `f1` above `s` and `f2` above `a`, and `s` sits level with `c` and `a` level with `s`: a column holds a gap so a
+  card with a single caller sits level with it.
 
 ### R11 Page writing
 
@@ -584,8 +594,9 @@ order, then problems from the graph.
 - Meta line: summary and `~<tok> tok md` (when tok is not 0) joined by ` · `.
 - OwnMd lines: `<name> ~<tok>` and the `when` text right-aligned; tooltip the `when`.
 - Arg buttons: `[<label or id>]`, tooltip the note.
-- Before edges are drawn, cards in one column (same x) are sorted by y and stacked from the top card's node y, 8 px
-  apart: each next card starts 8 px below the bottom of the card above it.
+- Before edges are drawn, cards in one column (same x) are sorted by y and keep their node y; a card that starts
+  less than 8 px below the bottom of the card above it (its measured height may exceed the layout height) moves
+  down to start 8 px below that bottom.
 - Every edge leaves the right side of the source card and enters the left side of the target, both 18 px below the
   card top. Target right of the source: curve between those points. Target in the same column or a column further left:
   dashed loop that bends out right of the source, runs left 40 px below the lower card, and bends into the left side of

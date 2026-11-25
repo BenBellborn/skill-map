@@ -568,6 +568,18 @@ def test_layout_polish_puts_the_most_used_card_level_with_its_caller():
     assert usage.get_edge_usage(cards, edges) == [1, 0, 1]
     layout.improve_columns(columns, cards, edges)
     assert columns[2] == [["f", "w"]] and cards["f"]["y"] == cards["s"]["y"]
+    assert cards["w"]["y"] == cards["f"]["y"] + layout.get_card_height(cards["f"]) + layout.ROW_GAP
+
+
+def test_layout_puts_a_card_with_a_single_caller_level_with_it_past_a_filler_card():
+    # SKILLMAP-10.11
+    cards = {i: {"id": i, "kind": "skill", "mds": []} for i in ("r", "q", "x", "c", "f1", "f2", "s", "a")}
+    cards["x"]["mds"] = [{}] * 5
+    links = (("r", "x"), ("q", "x"), ("r", "c"), ("x", "f1"), ("f1", "f2"), ("c", "s"), ("s", "a"))
+    layout.apply_layout({"nodes": list(cards.values()), "edges": [{"src": s, "dst": d} for s, d in links]})
+    y = {i: c["y"] for i, c in cards.items()}
+    assert y["x"] < y["c"] and y["f1"] < y["s"] and y["f2"] < y["a"]
+    assert y["s"] == y["c"] and y["a"] == y["s"]
 
 
 def count_crossings(cards: dict[str, dict], edges: list[dict]) -> int:
