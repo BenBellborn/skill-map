@@ -474,10 +474,10 @@ def fill_targets(targets: list[float | None], heights: list[int]) -> list[float]
     if filled and filled[first] is None:
         filled[first] = 0.0
     for k in range(first, 0, -1):
-        filled[k - 1] = filled[k] - heights[k - 1] - ROW_GAP
+        filled[k - 1] = filled[k] - (heights[k - 1] + ROW_GAP)
     for k in range(1, len(filled)):
         if filled[k] is None:
-            filled[k] = filled[k - 1] + heights[k - 1] + ROW_GAP
+            filled[k] = filled[k - 1] + (heights[k - 1] + ROW_GAP)
     return filled
 
 
@@ -487,6 +487,12 @@ def get_tight_ys(heights: list[int]) -> list[int]:
     for k in range(1, len(heights)):
         tight[k] = tight[k - 1] + heights[k - 1] + ROW_GAP
     return tight
+
+
+def is_clear(above_y: float, y: float, gap: float) -> bool:
+    """True when a card at y sits at least gap below the one at above_y."""
+    # rule: `fill_targets` adds or subtracts the same gap, so test both forms; one rounding must not merge touching cards.
+    return above_y + gap <= y or above_y <= y - gap
 
 
 def get_packed_ys(heights: list[int], targets: list[float]) -> list[float]:
@@ -501,7 +507,7 @@ def get_packed_ys(heights: list[int], targets: list[float]) -> list[float]:
         while blocks:
             above, above_total, above_count = blocks[-1]
             start = tight[first] - tight[above]
-            if above_total / above_count + start <= total / count:
+            if is_clear(above_total / above_count, total / count, start):
                 break
             blocks.pop()
             first, total, count = above, above_total + total - start * count, above_count + count

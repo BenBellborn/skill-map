@@ -1,6 +1,7 @@
 """Tests for skillmap.py: `python -m pytest -q skills/skill-map/scripts`."""
 import json
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -613,6 +614,18 @@ def test_layout_polish_counts_only_crossings_into_a_neighbour_column_with_four_c
         weights.setdefault(a, {})[b] = weights.setdefault(b, {})[a] = 1
     scorer = layout.ColumnScorer([["m1", "m2"]], cards, weights, {})
     assert scorer.crossings == {("m1", "m2"): 2 * layout.CROSSING_COST}
+
+
+def test_layout_packed_level_card_sits_exactly_on_its_caller_y():
+    # SKILLMAP-10.9
+    heights, wanted = [154, 82, 136], -28.01010816680211
+    ys = layout.get_packed_ys(heights, layout.fill_targets([wanted, None, None], heights))
+    assert ys[0] == wanted
+    rng = random.Random(1)  # a wanted card with fillers above it is as exact
+    for _ in range(2000):
+        heights, wanted = [rng.randint(40, 200) for _ in range(3)], rng.uniform(-300, 300)
+        ys = layout.get_packed_ys(heights, layout.fill_targets([None, None, wanted], heights))
+        assert ys[2] == wanted
 
 
 def test_agent_runs_come_from_count_and_many_runs_get_batch_hint(tmp_path, capsys):
