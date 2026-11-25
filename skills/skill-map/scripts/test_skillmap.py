@@ -628,6 +628,26 @@ def test_layout_packed_level_card_sits_exactly_on_its_caller_y():
         assert ys[2] == wanted
 
 
+def test_layout_fill_targets_stacks_cards_without_a_target_up_from_the_first_wanted_card():
+    # SKILLMAP-10.9
+    assert layout.fill_targets([None, None, 50.0, None], [10, 20, 30, 5]) == [
+        50.0 - 20 - 10 - 2 * layout.ROW_GAP, 50.0 - 20 - layout.ROW_GAP, 50.0, 50.0 + 30 + layout.ROW_GAP]
+
+
+def test_layout_polish_stops_when_column_orders_repeat_before_the_sweep_cap(monkeypatch):
+    # SKILLMAP-10.10
+    columns, calls = [[["a", "b"]]], []
+
+    def flip(blocks, scorer):
+        calls.append(1)
+        blocks[0].reverse()
+        return True
+
+    monkeypatch.setattr(layout, "improve_column", flip)
+    layout.sweep_columns(columns, [None])
+    assert len(calls) == 3 < layout.POLISH_PASSES
+
+
 def test_agent_runs_come_from_count_and_many_runs_get_batch_hint(tmp_path, capsys):
     # SKILLMAP-16.1
     root, cache = make_tree(tmp_path)
