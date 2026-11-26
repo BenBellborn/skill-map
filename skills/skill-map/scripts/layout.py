@@ -40,9 +40,11 @@ SIBLING_FLOOR = 5000  # least gain of such two cards, so unused siblings still j
 LEVEL_GAIN = 50  # gain per level edge between two columns
 ORDER_COST = 10  # cost per path of difference when a less used card sits above a more used one with the same caller
 CROSSING_COST = 100  # cost per crossing of two edges to one neighbor column, per path of both edges
+GAP_COST = 10  # cost per px of empty space between two cards in a column
 POLISH_PASSES = 20  # most sweeps; the polish stops at the first sweep that changes no column
 # rule: above any card's use, so a card level with its single caller outranks every median card in a packed block.
 LEVEL_RANK = 1_000_000
+FOLLOW_RANK = -2  # below a card with no target, so a loose card that closes a gap never moves the block above
 # rule: page line runs 18 px below lane top, like card edges: lane level with card at same y stays straight.
 LANE_HEIGHT = 18  # row gap above, line at the lane bottom, row gap below
 LANE_KIND = "lane"  # layout-only card, a slot of edges in a column they pass; never in data["nodes"]
@@ -50,6 +52,14 @@ LANE_KIND = "lane"  # layout-only card, a slot of edges in a column they pass; n
 # Packed block: first card, card count, highest rank, targets of cards of that rank less their offsets from the anchor
 # card, count of those cards, anchor card.
 Block = tuple[int, int, int, float, int, int]
+
+
+class PackInputs(NamedTuple):
+    """Per card of a column in order: filled target, rank, tight y, and whether it is loose."""
+    targets: list[float]
+    ranks: list[int]
+    tight: list[int]
+    loose: list[bool]
 
 
 class OrderFacts(NamedTuple):
@@ -589,9 +599,10 @@ class ColumnScorer:
         self.start_turn()
 
     def set_pack_facts(self, ids: list[str]) -> None:
-        """Facts no turn changes: single callers, heights, and order ranks and sibling gains of each two cards with
-        a shared caller."""
+        """Facts no turn changes: single callers, loose cards, heights, and order ranks and sibling gains of each two
+        cards with a shared caller."""
         self.single_caller = {i: self.get_outside_single_caller(i, ids) for i in ids}
+        self.loose = {i for i in ids if self.get_pull(i) < GAP_COST}
         self.heights = {i: get_card_height(self.nodes[i]) for i in ids}
         self.ranked = self.get_ranked_pairs(ids)
         self.sibling_gains = self.get_sibling_gains(ids)
@@ -620,10 +631,10 @@ class ColumnScorer:
     def set_current(self, blocks: list[list[str]]) -> None:
         """Later scores pack and count crossings only from where an order first differs from this one."""
         ids = get_ids(blocks)
-        targets, ranks, tight = self.get_pack_inputs(ids)
+        inputs = self.get_pack_inputs(ids)
         stacks: list[list[Block]] = [[]]
         for k in range(len(ids)):
-            stacks.append(pack_blocks(stacks[-1], range(k, k + 1), targets, ranks, tight))
+            stacks.append(pack_blocks(stacks[-1], range(k, k + 1), inputs))
         first_target = next((k for k, t in enumerate(self.get_targets(ids)) if t is not None), len(ids))
         self.current = OrderFacts(ids, first_target, self.get_full_crossed_cost(ids), stacks)
 
@@ -647,16 +658,16 @@ class ColumnScorer:
         """Cards in order, at least ROW_GAP apart; where cards collide, the highest-ranked sits on its wanted y
         (`get_ranks`, `get_packed_ys`)."""
         ids = get_ids(blocks)
-        targets, ranks, tight = self.get_pack_inputs(ids)
+        inputs = self.get_pack_inputs(ids)
         start = self.get_pack_start(ids)
         stack = self.current.stacks[start] if start else []
-        return dict(zip(ids, get_block_ys(pack_blocks(stack, range(start, len(ids)), targets, ranks, tight), tight)))
+        return dict(zip(ids, get_block_ys(pack_blocks(stack, range(start, len(ids)), inputs), inputs.tight)))
 
-    def get_pack_inputs(self, ids: list[str]) -> tuple[list[float], list[int], list[int]]:
-        """Filled targets, ranks and tight ys of the cards in order."""
+    def get_pack_inputs(self, ids: list[str]) -> "PackInputs":
         heights = [self.heights[i] for i in ids]
         targets = self.get_targets(ids)
-        return fill_targets(targets, heights), self.get_ranks(ids, targets), get_tight_ys(heights)
+        return PackInputs(fill_targets(targets, heights), self.get_ranks(ids, targets), get_tight_ys(heights),
+                          [i in self.loose for i in ids])
 
     def get_pack_start(self, ids: list[str]) -> int:
         """Count of top cards that pack as in the current order: those before the first change, when a card above
@@ -685,6 +696,14 @@ class ColumnScorer:
                 level.setdefault(caller, i)
         return [self.wishes[i] if level.get(self.single_caller[i], i) == i else None for i in ids]
 
+    def get_pull(self, node_id: str) -> int:
+        """Weight of the edges that set the card's wish: to its single caller, else to every card in another column.
+        Each px the card sits off its wish costs at most this much edge length, so a card that pulls less than
+        GAP_COST costs less tight under the card above than over a gap (`add_block`)."""
+        links = dict(self.outside[node_id])
+        caller = self.single_caller[node_id]
+        return links[caller] if caller else sum(links.values())
+
     def get_outside_single_caller(self, node_id: str, ids: list[str]) -> str | None:
         """The only caller of the card when it sits in another column, else None."""
         callers = self.callers.get(node_id, set())
@@ -699,14 +718,19 @@ class ColumnScorer:
     def get_order_score(self, blocks: list[list[str]]) -> float:
         """Per edge to another column, its height less LEVEL_GAIN when level; less the sibling gain of each two
         neighbor cards with a shared caller; plus ORDER_COST per path of difference where a less used card sits above
-        a more used one with the same caller; plus the crossing cost of each two cards, upper first. Edge terms count
-        per crossing path."""
+        a more used one with the same caller; plus the crossing cost of each two cards, upper first; plus GAP_COST per
+        px of empty space between cards. Edge terms count per crossing path."""
         ys = self.get_ys(blocks)
         edges = sum(w * (abs(y - v) or -LEVEL_GAIN) for i, y in ys.items() for v, w in self.outside_ys[i])
         ids = list(ys)
         siblings = sum(self.sibling_gains.get(pair, 0) for pair in zip(ids, ids[1:]))
         flipped = sum(diff for a, b, diff in self.ranked if ys[a] > ys[b])
-        return edges - siblings + ORDER_COST * flipped + self.get_crossed_cost(ids)
+        return edges - siblings + ORDER_COST * flipped + self.get_crossed_cost(ids) + self.get_gap_cost(ys)
+
+    def get_gap_cost(self, ys: dict[str, float]) -> float:
+        """GAP_COST per px between top and bottom of the stack left empty by cards and row gaps."""
+        ids = list(ys)
+        return GAP_COST * (ys[ids[-1]] - ys[ids[0]] - get_tight_ys([self.heights[i] for i in ids])[-1])
 
     def get_crossed_cost(self, ids: list[str]) -> float:
         """Crossing cost of each two cards, upper first. An order that swaps two neighbor parts of the current order
@@ -904,16 +928,16 @@ def get_packed_ys(heights: list[int], targets: list[float], ranks: list[int]) ->
     at the mean of its highest-ranked cards' targets less their offsets in the block; equal ranks give least squares."""
     # rule: polish packs per scored order, so merges move no card; offset in block = tight y less anchor card's.
     # rule: anchor = a top-ranked card: a lone top card lands exactly on its target, a level edge stays level.
-    tight = get_tight_ys(heights)
-    return get_block_ys(pack_blocks([], range(len(heights)), targets, ranks, tight), tight)
+    inputs = PackInputs(targets, ranks, get_tight_ys(heights), [False] * len(heights))
+    return get_block_ys(pack_blocks([], range(len(heights)), inputs), inputs.tight)
 
 
-def pack_blocks(stack: list[Block], cards: range, targets: list[float], ranks: list[int], tight: list[int]) -> list[Block]:
+def pack_blocks(stack: list[Block], cards: range, inputs: "PackInputs") -> list[Block]:
     """The stack of packed blocks after the cards are added under `stack`, the packed blocks of the cards above."""
     # rule: a card merges only upward, so the stack after the first k cards depends on those cards alone.
     blocks = list(stack)
     for i in cards:
-        add_block(blocks, (i, 1, ranks[i], targets[i], 1, i), tight)
+        add_block(blocks, (i, 1, inputs.ranks[i], inputs.targets[i], 1, i), inputs.tight, inputs.loose[i])
     return blocks
 
 
@@ -931,14 +955,19 @@ def get_changed_range(old: list[str], new: list[str]) -> range:
     return range(lo, hi + 1)
 
 
-def add_block(blocks: list[Block], block: Block, tight: list[int]) -> None:
-    """Adds the block under the others; it merges with each block above that it would overlap."""
+def add_block(blocks: list[Block], block: Block, tight: list[int], loose: bool) -> None:
+    """Adds the block under the others; it merges with each block above that it would overlap. A loose block
+    (`ColumnScorer.get_pull`) that would sit clear of the block above closes the gap: it joins that block as its
+    lowest-ranked card, so the block above stays put."""
     while blocks:
         above = blocks[-1]
         start = tight[block[5]] - tight[above[5]]
         if is_clear(above[3] / above[4], block[3] / block[4], start):
-            break
+            if not loose:
+                break
+            block = block[:2] + (FOLLOW_RANK,) + block[3:]
         block = merge_blocks(blocks.pop(), block, start)
+        loose = False
     blocks.append(block)
 
 

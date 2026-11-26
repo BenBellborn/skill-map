@@ -552,10 +552,16 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      than 8 below the block above joins it too, and so on upward. A block with one highest-ranked card puts that card
      exactly on its wish. When all cards of a block
      share one rank, this is the least squares fit of their wishes.
+     A loose card is one whose pull is less than 10, the gap cost per pixel. Its pull is the weight to its single
+     caller when it has one in another column, else the summed weights to its linked cards in other columns. Each
+     pixel the card sits off its wish adds at most its pull to the edge length, so a loose card that would sit more
+     than 8 below the block above (leaving a gap) joins that block instead, as its lowest-ranked card, and packs 8
+     below the card above. The block above stays put. A loose card with no block above keeps its wish.
    - Score: per edge to a card in another column, its weight times the absolute y difference of its two cards, or
      times -50 when that difference is 0 (a level edge); less, per two cards next to each other (in stack order) that
      share a source of an edge into both, 200 times the lower use of the two, at least 5000; plus 10 times the use difference of each two
-     cards that share such a source where the less used card sits above; plus the crossing cost.
+     cards that share such a source where the less used card sits above; plus the crossing cost; plus 10 per pixel
+     of gap: the space between the top card's top and the bottom card's bottom that cards and 8-pixel gaps do not fill.
    - Crossing cost: per two edges, each from a card of this column to a card of the same column right next to it
      (left or right), that cross: 100 times the summed weights of the two edges. Two such edges cross when their cards
      in this column and their other cards sit in opposite order; edges that share a card never cross. Self edges,
@@ -636,6 +642,10 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
   agents `a1`, `a2` in column 3, tool `x` in column 4, and edges `c` to `a1`, `a2` and `x`, when the place step runs,
   then `a1` and `a2` move as one unit under `r` and fill column 1, and `x` stays right of them:
   `c` | `r`, `a1`, `a2` | `x`, `s`. Moved one by one, `x` (the best single move) takes column 1 first.
+- **SKILLMAP-10.20:** Given `p` (y 0) and `q` (y 400) in column 0, and `a` above `b` (cards of height 64) in column
+  1, each with a single caller (`p` to `a`, `q` to `b`), when the column packs, then with weight 1 per edge `b` is
+  loose and sits 8 under `a`, at 72; with weight 10 `b` sits level with `q`, at 400, and the score holds 10 times
+  the 328-pixel gap; alone in its column, a loose `b` keeps its wish, 400.
 
 ### R11 Page writing
 

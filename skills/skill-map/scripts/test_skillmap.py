@@ -636,8 +636,9 @@ def test_layout_polish_puts_the_most_used_card_level_with_its_caller():
     assert cards["w"]["y"] == cards["f"]["y"] + layout.get_card_height(cards["f"]) + layout.ROW_GAP
 
 
-def test_layout_puts_a_card_with_a_single_caller_level_with_it_past_a_filler_card():
+def test_layout_puts_a_card_with_a_single_caller_level_with_it_past_a_filler_card(monkeypatch):
     # SKILLMAP-10.11
+    monkeypatch.setattr(layout, "GAP_COST", 0)  # unused edges pull less than the gap cost; this pins the level rule
     cards = {i: {"id": i, "kind": "skill", "mds": []} for i in ("r", "q", "x", "c", "f1", "f2", "s", "a")}
     cards["x"]["mds"] = [{}] * 5
     links = (("r", "x"), ("q", "x"), ("r", "c"), ("x", "f1"), ("f1", "f2"), ("c", "s"), ("s", "a"))
@@ -730,6 +731,19 @@ def test_layout_polish_ends_with_single_caller_cards_level_with_their_callers_fi
     monkeypatch.setattr(layout, "sweep_columns", move_callers)
     layout.improve_columns(columns, cards, [{"src": "e", "dst": "p"}, {"src": "p", "dst": "a"}], [0, 0])
     assert cards["a"]["y"] == cards["p"]["y"] == cards["e"]["y"] == 30.5
+
+
+@pytest.mark.parametrize("pull, column, b_y", [(1, ["a", "b"], 72), (layout.GAP_COST, ["a", "b"], 400), (1, ["b"], 400)])
+def test_layout_packs_a_card_that_pulls_less_than_the_gap_cost_tight_under_the_card_above(pull, column, b_y):
+    # SKILLMAP-10.20
+    cards = {"p": {"id": "p", "kind": "skill", "mds": [], "x": 0, "y": 0},
+             "q": {"id": "q", "kind": "skill", "mds": [], "x": 0, "y": 400}}
+    cards |= {i: {"id": i, "kind": "skill", "mds": [], "x": layout.COLUMN_WIDTH, "y": 0} for i in "ab"}
+    weights = {"p": {"a": pull}, "a": {"p": pull}, "q": {"b": pull}, "b": {"q": pull}}
+    scorer = layout.ColumnScorer([column], cards, weights, {"a": {"p"}, "b": {"q"}})
+    assert scorer.get_ys([column])["b"] == b_y
+    if b_y == 400 and len(column) == 2:  # two level edges, 328 px of gap under a
+        assert scorer.get_order_score([column]) == -2 * pull * layout.LEVEL_GAIN + layout.GAP_COST * 328
 
 
 @pytest.mark.parametrize("use_a, use_b, level", [(1, 3, "b"), (3, 1, "a")])
