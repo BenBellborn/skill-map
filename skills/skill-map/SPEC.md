@@ -497,10 +497,13 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
    times cohesion. Cohesion: per band with 2 or more nodes, the
    pairs of its nodes that share a column, divided by its node count less 1; a node that leaves a column holding all
    the rest of its band so loses 1. A backward edge (100) costs more than that (30), so it moves a node out of its
-   band's column. Repeat: over every node that is not a command, in ascending id order, and every column it does not
-   sit in, try moving it into the block of that column that holds a node it shares an edge with, else the last block,
-   when that column stays within the limit; empty blocks and columns close up. Keep the try with the lowest score
-   when it is lower than the current score, the first such try on a tie; stop when no try lowers the score.
+   band's column. A unit is a node with its siblings: the nodes of its column that are not commands and have the same
+   set of callers (nodes with an edge to it), at least one. Repeat: over every node that is not a command, in ascending
+   id order, and every column it does not sit in, try moving its unit into that column, when the node is the lowest id
+   of its unit and that column stays within the limit with all of the unit's nodes; each node of the unit, in column
+   order, joins the block of that column that holds a node it shares an edge with, else the last block; empty blocks
+   and columns close up. Keep the try with the lowest score when it is lower than the current score, the first such
+   try on a tie; stop when no try lowers the score.
 1. Positions: x is column times 380. y starts at 0 per column; each card, block after block, adds its height plus 8.
    Height is 64 plus
    18 per OwnMd line, plus 18 when the node has args, plus 18 for an agent.
@@ -613,6 +616,10 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.16:** Given a block `a`, `l1`, `b` (`l1` a lane), when the polish tries moves in that block, then it tries
   `b`, `a`, `l1` (unit `a` with `l1` after `b`), `l1`, `a`, `b` and `a`, `b`, `l1` (the lane alone), and never `l1`, `b`, `a`,
   which splits `a` from its lane without moving the lane alone.
+- **SKILLMAP-10.19:** Given command `c` (10 OwnMd lines) in column 0, command `r` in column 1, shared `s` in column 2,
+  agents `a1`, `a2` in column 3, tool `x` in column 4, and edges `c` to `a1`, `a2` and `x`, when the place step runs,
+  then `a1` and `a2` move as one unit under `r` and fill column 1, and `x` stays right of them:
+  `c` | `r`, `a1`, `a2` | `x`, `s`. Moved one by one, `x` (the best single move) takes column 1 first.
 
 ### R11 Page writing
 

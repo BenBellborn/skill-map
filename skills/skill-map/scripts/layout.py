@@ -1,6 +1,7 @@
 """Places map cards in columns: one band of columns per kind, callers left of callees inside a band; then whole
-columns stack under others while that makes edges flow left to right with shorter spans; last, single cards leave
-their band's column when that saves more flow cost than the cohesion they lose. Rubber bands then sort each column,
+columns stack under others while that makes edges flow left to right with shorter spans; last, cards leave their
+band's column, each with its siblings (same callers, same column) as one unit, when that saves more flow cost than the
+cohesion they lose. Rubber bands then sort each column,
 and each column becomes a packed stack (cards in order, gaps allowed, colliding cards led by the highest-ranked
 card's wanted y) in the order that scores best, with sweeps both ways; the polish ends with one pass of fresh
 wishes, left to right (callers mostly sit left). Before the pull, an edge that skips columns gets a lane card per
@@ -8,6 +9,7 @@ passed column (shared per source; edges alone in their source's lane share one p
 a free row for its line; lanes end up in edge `lanes`.
 Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves."""
 from collections import Counter
+from collections.abc import Iterable
 from typing import NamedTuple
 
 from usage import get_edge_usage
@@ -207,22 +209,29 @@ def get_span_cost(span: int, pass_cost: int) -> int:
 
 
 def place_cards(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list[dict]) -> list[list[list[str]]]:
-    """Greedy: move the one card (never a command) to the other column that lowers flow cost less cohesion gain
-    most, while no column grows past the tallest column; repeat until no move helps."""
+    """Greedy: move the one unit (a card with its siblings in its column; never a command) to the other column that
+    lowers flow cost less cohesion gain most, while no column grows past the tallest column; repeat until no move
+    helps."""
     limit = max((get_stack_height(c, nodes) for c in columns), default=0)
     links = [(e["src"], e["dst"]) for e in edges if e["src"] != e["dst"]]
-    movable = sorted(i for i, n in nodes.items() if n["kind"] != "command")
+    movable = sorted(i for i, n in nodes.items() if is_movable(n))
     while True:
-        best = MoveScorer(columns, nodes, links, limit).get_best_move(movable)
+        scorer = MoveScorer(columns, nodes, links, limit)
+        best = scorer.get_best_move(movable)
         if best is None:
             return columns
-        columns = move_card(columns, *best, links)
+        columns = move_cards(columns, scorer.get_unit(best[0]), best[1], links)
+
+
+def is_movable(node: dict) -> bool:
+    return node["kind"] != "command"
 
 
 class MoveScorer:
-    """Score change (flow cost less cohesion gain) of moving one card to another column of one layout. Only the
-    card's links and its band's counts in both columns change, unless its column empties: then later columns shift,
-    and the layout is scored whole."""
+    """Score change (flow cost less cohesion gain) of moving one unit to another column of one layout. A unit is a
+    card with its siblings: the movable cards of its column with the same callers. Only the unit's links and its
+    bands' counts in both columns change, unless its column empties: then later columns shift, and the layout is
+    scored whole."""
 
     def __init__(self, columns: list[list[list[str]]], nodes: dict[str, dict], links: list[tuple[str, str]],
                  limit: int):
@@ -230,55 +239,90 @@ class MoveScorer:
         self.band = {i: get_band(n) for i, n in nodes.items()}
         self.size = Counter(self.band.values())
         self.links_of = get_links_of(links)
-        self.column = get_column_index(columns)
-        self.counts = [Counter(self.band[i] for i in get_ids(blocks)) for blocks in columns]
-        self.heights = [get_stack_height(blocks, nodes) for blocks in columns]
+        self.callers = get_callers(links)
+        self.set_column_facts()
+        self.units: dict[str, list[str]] = {}
         self.current_score: float | None = None
 
+    def set_column_facts(self) -> None:
+        """Column of each card, band counts and stack height per column."""
+        self.column = get_column_index(self.columns)
+        self.counts = [Counter(self.band[i] for i in get_ids(blocks)) for blocks in self.columns]
+        self.heights = [get_stack_height(blocks, self.nodes) for blocks in self.columns]
+
     def get_best_move(self, movable: list[str]) -> tuple[str, int] | None:
-        """(card, target) of the lowest score change below 0; the first such move wins a tie."""
+        """(first card of the unit, target) of the lowest score change below 0; the first such move wins a tie. A
+        unit is tried once, at its first card in movable order."""
         best, best_gain = None, 0
         moves = ((i, t) for i in movable for t in range(len(self.columns)))
         for node_id, target in moves:
+            if min(self.get_unit(node_id)) != node_id:
+                continue
             gain = self.get_gain(node_id, target)
             if gain is not None and gain < best_gain:
                 best, best_gain = (node_id, target), gain
         return best
 
+    def get_unit(self, node_id: str) -> list[str]:
+        """The card and its siblings, in column order."""
+        if node_id not in self.units:
+            key = self.callers.get(node_id)
+            ids = get_ids(self.columns[self.column[node_id]])
+            self.units[node_id] = [i for i in ids if i == node_id
+                                   or key and self.callers.get(i) == key and is_movable(self.nodes[i])]
+        return self.units[node_id]
+
     def get_score(self, columns: list[list[list[str]]]) -> float:
         return get_flow_cost(columns, self.links, PASS_COST) - COHESION_GAIN * get_cohesion(columns, self.band)
 
     def get_gain(self, node_id: str, target: int) -> float | None:
-        """None when the card already sits in the target column or the target grows past the limit."""
+        """Change of moving the card's unit. None when it already sits in the target column or the target grows past
+        the limit."""
+        unit = self.get_unit(node_id)
         source = self.column[node_id]
-        if target == source or self.heights[target] + get_card_height(self.nodes[node_id]) + ROW_GAP > self.limit:
+        height = sum(get_card_height(self.nodes[i]) + ROW_GAP for i in unit)
+        if target == source or self.heights[target] + height > self.limit:
             return None
-        if self.counts[source].total() == 1:
-            gain = self.get_emptying_gain(node_id, target)
+        if self.counts[source].total() == len(unit):
+            gain = self.get_emptying_gain(unit, target)
         else:
-            gain = self.get_flow_change(node_id, target) - COHESION_GAIN * self.get_cohesion_change(node_id, target)
+            gain = self.get_flow_change(unit, target) - COHESION_GAIN * self.get_cohesion_change(unit, target)
         # rule: rounded, so a whole-layout gain with float noise ties an equal change gain, and the first move wins.
         return round(gain, GAIN_DIGITS)
 
-    def get_emptying_gain(self, node_id: str, target: int) -> float:
+    def get_emptying_gain(self, unit: list[str], target: int) -> float:
         if self.current_score is None:
             self.current_score = self.get_score(self.columns)
-        return self.get_score(move_card(self.columns, node_id, target, self.links)) - self.current_score
+        return self.get_score(move_cards(self.columns, unit, target, self.links)) - self.current_score
 
-    def get_flow_change(self, node_id: str, target: int) -> int:
+    def get_flow_change(self, unit: list[str], target: int) -> int:
         column = self.column
         change = 0
-        for src, dst in self.links_of.get(node_id, []):
-            new_src, new_dst = (target if i == node_id else column[i] for i in (src, dst))
-            change += get_span_cost(new_dst - new_src, PASS_COST) - get_span_cost(column[dst] - column[src], PASS_COST)
+        counted: set[str] = set()
+        for node_id in unit:
+            for src, dst in self.links_of.get(node_id, []):
+                if src in counted or dst in counted:
+                    continue  # a link inside the unit, counted at its first card
+                new_src, new_dst = (target if i in unit else column[i] for i in (src, dst))
+                change += (get_span_cost(new_dst - new_src, PASS_COST)
+                           - get_span_cost(column[dst] - column[src], PASS_COST))
+            counted.add(node_id)
         return change
 
-    def get_cohesion_change(self, node_id: str, target: int) -> float:
-        band = self.band[node_id]
-        if self.size[band] == 1:
-            return 0
-        source = self.column[node_id]
-        return (self.counts[target][band] - (self.counts[source][band] - 1)) / (self.size[band] - 1)
+    def get_cohesion_change(self, unit: list[str], target: int) -> float:
+        source = self.column[unit[0]]
+        change = 0.0
+        for band, moved in Counter(self.band[i] for i in unit).items():
+            if self.size[band] == 1:
+                continue
+            stay, join = self.counts[source][band], self.counts[target][band]
+            pairs = get_pairs(join + moved) - get_pairs(join) + get_pairs(stay - moved) - get_pairs(stay)
+            change += pairs / (self.size[band] - 1)
+        return change
+
+
+def get_pairs(count: int) -> float:
+    return count * (count - 1) / 2
 
 
 def get_links_of(links: list[tuple[str, str]]) -> dict[str, list[tuple[str, str]]]:
@@ -316,6 +360,13 @@ def move_card(columns: list[list[list[str]]], node_id: str, target: int,
     home = next((block for block in trial[target] if linked & set(block)), trial[target][-1])
     home.append(node_id)
     return close_up(trial)
+
+
+def move_cards(columns: list[list[list[str]]], unit: list[str], target: int,
+               links: list[tuple[str, str]]) -> list[list[list[str]]]:
+    for node_id in unit:
+        columns = move_card(columns, node_id, target, links)
+    return columns
 
 
 def drop_card(columns: list[list[list[str]]], node_id: str) -> list[list[list[str]]]:
@@ -424,11 +475,11 @@ def get_links(edges: list[dict]) -> dict[str, list[str]]:
     return links
 
 
-def get_callers(edges: list[dict]) -> dict[str, set[str]]:
+def get_callers(links: Iterable[tuple[str, str]]) -> dict[str, set[str]]:
     callers: dict[str, set[str]] = {}
-    for edge in edges:
-        if edge["src"] != edge["dst"]:
-            callers.setdefault(edge["dst"], set()).add(edge["src"])
+    for src, dst in links:
+        if src != dst:
+            callers.setdefault(dst, set()).add(src)
     return callers
 
 
@@ -459,7 +510,7 @@ def improve_columns(columns: list[list[list[str]]], nodes: dict[str, dict], edge
     changes no column or the column orders repeat those after an earlier sweep the same way, each column taking its
     best order (`improve_column`); last, each column packs once more on fresh wishes. `usage`: paths per edge."""
     weights = get_link_weights(edges, usage)
-    callers = get_callers(edges)
+    callers = get_callers((e["src"], e["dst"]) for e in edges)
     scorers = [ColumnScorer(blocks, nodes, weights, callers) for blocks in columns]
     refresh_ys(columns, scorers)
     sweep_columns(columns, scorers)

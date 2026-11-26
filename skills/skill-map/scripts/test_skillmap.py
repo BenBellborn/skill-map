@@ -522,23 +522,38 @@ def test_layout_moves_a_card_out_of_its_band_column_when_an_edge_runs_back():
     assert columns == [[["c"]], [["r", "a1"]], [["s"]], [["a2", "a3"]]]
 
 
+def test_layout_place_cards_moves_siblings_as_one_unit():
+    # SKILLMAP-10.19
+    kinds = {"c": "command", "r": "command", "s": "shared", "a1": "agent", "a2": "agent", "x": "tool"}
+    cards = {i: {"id": i, "kind": k, "mds": []} for i, k in kinds.items()}
+    cards["c"]["mds"] = [{}] * 10
+    edges = [{"src": "c", "dst": d} for d in ("a1", "a2", "x")]
+    columns = layout.place_cards([[["c"]], [["r"]], [["s"]], [["a1", "a2"]], [["x"]]], cards, edges)
+    assert columns == [[["c"]], [["r", "a1", "a2"]], [["x", "s"]]]
+
+
+
 def test_layout_place_cards_move_gain_equals_full_rescore():
     kinds = {"c": "command", "a1": "agent", "a2": "agent", "s1": "shared", "s2": "shared", "s3": "shared",
              "m1": "md", "m2": "md"}
     cards = {i: {"id": i, "kind": k, "mds": []} for i, k in kinds.items()}
     cards["c"]["mds"] = [{}] * 6
-    # m1 sits alone, so its moves empty a column; s1, s2 share a column in two blocks; a1 -> s1 twice
+    # m1 sits alone, so its moves empty a column; s1, s2 share a column in two blocks; a1 -> s1 twice; a1, a2 are
+    # siblings (caller c), so they move as one unit
     columns = [[["c"]], [["a1", "a2"]], [["s1"], ["s2"]], [["m1"]], [["s3", "m2"]]]
-    links = [("c", "a1"), ("a1", "s1"), ("a1", "s1"), ("a2", "s3"), ("s1", "m1"), ("m2", "s2"), ("c", "m2")]
+    links = [("c", "a1"), ("c", "a2"), ("a1", "s1"), ("a1", "s1"), ("a2", "s3"), ("s1", "m1"), ("m2", "s2"),
+             ("c", "m2")]
     limit = max(layout.get_stack_height(c, cards) for c in columns)
     band = {i: layout.get_band(n) for i, n in cards.items()}
     score = lambda cols: (layout.get_flow_cost(cols, links, layout.PASS_COST)
                           - layout.COHESION_GAIN * layout.get_cohesion(cols, band))
     scorer = layout.MoveScorer(columns, cards, links, limit)
+    assert scorer.get_unit("a2") == ["a1", "a2"] and scorer.get_unit("s1") == ["s1"]
     allowed = 0
     for node_id in kinds:
         for target in range(len(columns)):
-            trial = layout.move_card(columns, node_id, target, links)
+            unit = scorer.get_unit(node_id)
+            trial = None if target == scorer.column[node_id] else layout.move_cards(columns, unit, target, links)
             home = trial and next(c for c in trial if any(node_id in block for block in c))
             too_tall = trial is not None and layout.get_stack_height(home, cards) > limit
             expected = None if trial is None or too_tall else score(trial) - score(columns)
