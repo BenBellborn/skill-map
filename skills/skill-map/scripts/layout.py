@@ -7,7 +7,10 @@ card's wanted y) in the order that scores best, with sweeps both ways; the polis
 wishes, left to right (callers mostly sit left). Before the pull, an edge that skips columns gets a lane card per
 passed column (shared per source; edges alone in their source's lane share one per target), so pull and polish keep
 a free row for its line; lanes end up in edge `lanes`.
-Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves."""
+Polish moves a card with the lanes right under it as one unit, and each lane alone, so lanes add few moves.
+Last, each group of linked cards shifts up as one, under the groups before it, so no group drifts far from the map;
+then each band that no card or lane of any column covers shrinks to the row gap."""
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Iterable
 from typing import NamedTuple
@@ -77,9 +80,11 @@ def set_rows(columns: list[list[list[str]]], nodes: dict[str, dict], edges: list
     lanes = get_lane_ids(edges, get_passed_columns(columns, edges))
     add_lanes(columns, nodes, edges, lanes)
     links, link_usage = split_edges(edges, usage, lanes)
-    pull_linked_cards(columns, nodes, get_links(links))
+    linked = get_links(links)
+    pull_linked_cards(columns, nodes, linked)
     improve_columns(columns, nodes, links, link_usage)
-    set_top_to_zero(nodes)
+    stack_groups(columns, nodes, linked)
+    close_empty_bands(nodes)
     set_edge_lanes(edges, nodes, lanes)
 
 
@@ -797,10 +802,65 @@ def get_units(block: list[str], nodes: dict[str, dict]) -> list[list[str]]:
     return units
 
 
-def set_top_to_zero(nodes: dict[str, dict]) -> None:
-    top = min((n["y"] for n in nodes.values()), default=0)
-    for n in nodes.values():
-        n["y"] = round(n["y"] - top)
+def stack_groups(columns: list[list[list[str]]], nodes: dict[str, dict], links: dict[str, list[str]]) -> None:
+    """Each group of linked cards moves up as one, so its shape stays, until a card or lane of it sits at 0 or 8 below
+    a card of an earlier group in the same column; the largest group goes first, so its top card sits at 0."""
+    # rule: pull and polish move linked cards only. Unlinked group keeps its y while rest drifts: ends far under map.
+    floor: dict[int, float] = {}
+    for group in get_groups(nodes, get_stack_links(columns, links)):
+        shift = max(floor.get(nodes[i]["x"], 0) - nodes[i]["y"] for i in group)
+        for i in group:
+            card = nodes[i]
+            card["y"] = round(card["y"] + shift)
+            floor[card["x"]] = max(floor.get(card["x"], 0), card["y"] + get_card_height(card) + ROW_GAP)
+
+
+def get_stack_links(columns: list[list[list[str]]], links: dict[str, list[str]]) -> dict[str, list[str]]:
+    """`links` plus, per card with no link, a link to the card above it in its column, or below for the top card:
+    it packed against that card, so it keeps its place there."""
+    stack_links = {i: list(linked) for i, linked in links.items()}
+    for blocks in columns:
+        ids = get_ids(blocks)
+        for k, i in enumerate(ids):
+            if i not in links and len(ids) > 1:
+                neighbor = ids[k - 1] if k else ids[1]
+                stack_links.setdefault(i, []).append(neighbor)
+                stack_links.setdefault(neighbor, []).append(i)
+    return stack_links
+
+
+def get_groups(nodes: dict[str, dict], links: dict[str, list[str]]) -> list[list[str]]:
+    """Cards joined by links, largest group first; equal sizes go top down by their top card's y."""
+    seen: set[str] = set()
+    groups = []
+    for start in nodes:
+        if start in seen:
+            continue
+        seen.add(start)
+        group = [start]
+        for i in group:  # rule: the loop reads cards appended during it, so the group grows to every linked card
+            for j in links.get(i, []):
+                if j not in seen:
+                    seen.add(j)
+                    group.append(j)
+        groups.append(group)
+    return sorted(groups, key=lambda g: (-len(g), min(nodes[i]["y"] for i in g)))
+
+
+def close_empty_bands(nodes: dict[str, dict]) -> None:
+    """Each y band that no card or lane of any column covers, when over ROW_GAP high, shrinks to ROW_GAP: every card
+    and lane below it moves up by the same amount, so level edges, orders and crossings stay."""
+    starts: list[float] = []  # top of the first card under each cut band
+    cuts: list[float] = []  # px cut down to and with that band
+    bottom = None
+    for top, end in sorted((n["y"], n["y"] + get_card_height(n)) for n in nodes.values()):
+        if bottom is not None and top - bottom > ROW_GAP:
+            starts.append(top)
+            cuts.append((cuts[-1] if cuts else 0) + top - bottom - ROW_GAP)
+        bottom = end if bottom is None else max(bottom, end)
+    for card in nodes.values():
+        if k := bisect_right(starts, card["y"]):
+            card["y"] -= cuts[k - 1]
 
 
 def set_edge_lanes(edges: list[dict], nodes: dict[str, dict], lanes: list[list[str]]) -> None:

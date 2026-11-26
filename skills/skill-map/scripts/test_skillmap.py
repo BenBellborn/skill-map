@@ -1110,3 +1110,22 @@ def test_layout_get_units_joins_lanes_in_a_row_at_the_block_top_into_one_unit():
              for i in ("l0", "l0b", "a", "l1", "b")}
     assert layout.get_units(["l0", "l0b", "a", "l1", "b"], nodes) == [["l0", "l0b"], ["a", "l1"], ["b"]]
     assert ["l0", "b", "l0b", "a"] not in list(layout.get_block_moves(["l0", "l0b", "a", "b"], nodes))
+
+
+def test_layout_stacks_a_group_with_no_link_to_the_map_right_under_it():
+    # SKILLMAP-10.17
+    places = {"a": (0, -5000), "b": (1, -5000), "c": (1, -4900), "h": (1, 1447), "m": (2, 1447), "e": (2, 1519)}
+    nodes = {i: {"id": i, "kind": "skill", "mds": [], "x": x * layout.COLUMN_WIDTH, "y": y} for i, (x, y) in places.items()}
+    columns = [[["a"]], [["b", "c"], ["h"]], [["m", "e"]]]
+    links = layout.get_links([{"src": s, "dst": d} for s, d in (("a", "b"), ("a", "c"), ("h", "m"))])
+    layout.stack_groups(columns, nodes, links)
+    assert {i: n["y"] for i, n in nodes.items()} == {"a": 0, "b": 0, "c": 100, "h": 172, "m": 172, "e": 244}
+
+
+def test_layout_shrinks_each_band_no_card_or_lane_covers_to_the_row_gap():
+    # SKILLMAP-10.18
+    places = {"a": (0, 0), "b": (1, 300), "l": (1, 400), "c": (0, 500), "d": (1, 504)}
+    nodes = {i: {"id": i, "kind": layout.LANE_KIND if i == "l" else "skill", "mds": [], "x": x * layout.COLUMN_WIDTH,
+                 "y": y} for i, (x, y) in places.items()}
+    layout.close_empty_bands(nodes)
+    assert {i: n["y"] for i, n in nodes.items()} == {"a": 0, "b": 72, "l": 144, "c": 170, "d": 174}

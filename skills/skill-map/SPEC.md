@@ -561,7 +561,16 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
      in this column and their other cards sit in opposite order; edges that share a card never cross. Self edges,
      edges inside one column and edges to a column further away are left out. The other cards' y values are those at
      the start of the column's turn.
-1. Last, all y values shift so the top card or lane sits at 0, rounded to whole pixels. Each edge that passes
+1. Last, the groups stack. A group is a set of cards and lanes joined by edges split at their lanes, self edges left
+   out; a card with no edge joins the group of the card above it in its column, or of the card below when it is the
+   top card, and is a group alone only when its column holds no other card. Groups go largest first, and on equal size the one with the higher top
+   card first. Each group shifts up or down as one, so its cards keep their y differences, to the highest place where
+   each of its cards and lanes sits at y 0 or more and at least 8 below the bottom of every card and lane of an earlier
+   group in its column. So the largest group's top sits at 0, and a group with no edge to the rest of the map sits
+   right under it, not where the pull and polish left it. Y values round to whole pixels. Then each empty band
+   shrinks: a band is a y range that no card or lane of any column covers, and when it is more than 8 high, every card
+   and lane below it moves up so it is 8 high. All cards below a band move by the same amount, so level edges, card
+   orders and crossings stay. Each edge that passes
    columns gets `lanes`: the y of its lane in each passed column, left to right. Lanes never become nodes.
 
 - **SKILLMAP-10.1:** Given `fix` calls `plan` and `plan` calls `fix`, when `render` runs, then edge fix to plan has
@@ -616,6 +625,13 @@ carries the agent `when`, `args`, `loop` and `count`. The agent loads and calls 
 - **SKILLMAP-10.16:** Given a block `a`, `l1`, `b` (`l1` a lane), when the polish tries moves in that block, then it tries
   `b`, `a`, `l1` (unit `a` with `l1` after `b`), `l1`, `a`, `b` and `a`, `b`, `l1` (the lane alone), and never `l1`, `b`, `a`,
   which splits `a` from its lane without moving the lane alone.
+- **SKILLMAP-10.17:** Given `a` (column 0, y -5000) linked to `b` (column 1, y -5000) and `c` (column 1, y -4900), `h`
+  (column 1, y 1447) linked to `m` (column 2, y 1447), and `e` (column 2, y 1519, under `m`) with no edge, all of height
+  64, when the groups stack, then `a` and `b` sit at 0, `c` at 100, `h` and `m` at 172 (8 below `c`), and `e` stays 8
+  under `m`, at 244.
+- **SKILLMAP-10.18:** Given `a` (column 0, y 0), `b` (column 1, y 300), lane `l` (column 1, y 400, height 18), `c`
+  (column 0, y 500) and `d` (column 1, y 504), cards of height 64, when the empty bands shrink, then `a` stays at 0, `b`
+  sits at 72, `l` at 144 and `c` at 170, each 8 below the one above, and `d` stays 4 below `c`, at 174.
 - **SKILLMAP-10.19:** Given command `c` (10 OwnMd lines) in column 0, command `r` in column 1, shared `s` in column 2,
   agents `a1`, `a2` in column 3, tool `x` in column 4, and edges `c` to `a1`, `a2` and `x`, when the place step runs,
   then `a1` and `a2` move as one unit under `r` and fill column 1, and `x` stays right of them:
